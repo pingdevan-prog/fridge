@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Fridge: family kitchen assistant</title>
+  <meta name="description" content="Track the food you have, plan meals, build H-E-B shopping lists and track calories.">
+  <meta name="theme-color" content="#FFF1C4">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Fridge">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div id="app">
+    <main id="view" tabindex="-1"></main>
+  </div>
+  <nav id="tabs" aria-label="Main">
+    <button data-act="tab" data-tab="fridge">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2.5" width="14" height="19" rx="3"/><path d="M5 9.5h14M9 6v1.5M9 12.5v3"/></svg><span>Fridge</span>
+    </button>
+    <button data-act="tab" data-tab="meals">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2.5v8M4.5 2.5v5a2.5 2.5 0 0 0 5 0v-5M7 10.5v11M17 2.5c-2 1.5-3 4-3 7 0 1.5 1 2.5 3 2.5v9.5z"/></svg><span>Meals</span>
+    </button>
+    <button data-act="tab" data-tab="plan">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M3.5 10h17M8 2.5v4M16 2.5v4M8 14h2M14 14h2M8 17.5h2"/></svg><span>Plan</span>
+    </button>
+    <button data-act="tab" data-tab="shop">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 3.5h3l2.2 11h10.6l2.2-8H6.5"/><circle cx="9.5" cy="19" r="1.6"/><circle cx="17" cy="19" r="1.6"/></svg><span>Shop</span>
+    </button>
+    <button data-act="tab" data-tab="me">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4.2"/><path d="M4 21c.8-4.2 4-6 8-6s7.2 1.800 8 6"/></svg><span>Me</span>
+    </button>
+  </nav>
+  <div id="overlay"></div>
+  <div id="sheets"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
