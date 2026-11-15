@@ -1,6 +1,6 @@
 // Service worker: makes the app installable and lets the app shell load offline.
 // Same-origin files use "network first, cache as fallback" so updates arrive right away when online.
-const CACHE = 'fridge-v2';
+const CACHE = 'fridge-v3';
 const SHELL = ['./', 'index.html', 'css/styles.css', 'manifest.webmanifest', 'icons/icon-192.png',
   'js/app.js', 'js/store.js', 'js/data/foods.js', 'js/data/heb.js',
   'js/lib/units.js', 'js/lib/match.js', 'js/lib/nutrition.js', 'js/lib/receipt.js', 'js/lib/ai.js', 'js/lib/recipes.js', 'js/lib/planner.js', 'js/lib/shopping.js', 'js/lib/sync.js',

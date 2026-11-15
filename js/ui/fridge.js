@@ -41,12 +41,12 @@ function render() {
   if (!state.fridge.length) {
     return `<div class="top"><h1>Fridge</h1></div>
       <div class="card empty"><div class="big">🧊</div><h2>Your fridge is empty</h2>
-      <p class="muted">Add the food you have at home. Snap a photo of each food, scan a barcode, or scan your H-E-B receipt after shopping.</p>
+      <p class="muted">Add the food you have at home. Take photos of your drawers and shelves, or scan your H-E-B receipt after shopping.</p>
       ${addOptions()}</div>`;
   }
   return `
     <div class="top"><div><h1>Fridge</h1><p class="sub">${state.fridge.filter((i) => i.qty > 0).length} foods at home</p></div>
-      <button class="btn sm soft" data-act="item-new"><span>✏️</span>Type it in</button></div>
+      <button class="btn sm soft" data-act="item-new">Type it in</button></div>
     ${exp.length ? `<section class="expiring"><div class="rowf"><h2 class="grow">Use these soon</h2><button class="btn sm dark" data-act="cook-expiring">Find recipes</button></div>
       <div class="scroller" style="margin-top:10px">${exp.map((i) => tile(i, true)).join('')}</div></section>` : ''}
     <div class="stack tight" style="margin-top:14px">
@@ -62,13 +62,13 @@ registerView('fridge', render);
 /** The four ways to get food into the fridge. */
 function addOptions() {
   return `<div class="stack" style="width:100%">
-    <label class="btn dark block"><span>📷</span>Photo of a food<input type="file" accept="image/*" capture="environment" hidden data-change="food-photo"></label>
-    <button class="btn block" data-act="barcode-open"><span>🔎</span>Scan a barcode</button>
-    <button class="btn soft block" data-act="scan-open"><span>🧾</span>Scan a receipt</button>
-    <button class="btn ghost block" data-act="item-new"><span>✏️</span>Type it in</button></div>`;
+    <label class="btn dark block" data-act="photo-warm">Take a photo of your food<input type="file" accept="image/*" capture="environment" hidden data-change="food-photo"></label>
+    <label class="btn block" data-act="photo-warm">Choose photos<input type="file" accept="image/*" multiple hidden data-change="food-photo"></label>
+    <button class="btn soft block" data-act="scan-open">Scan a receipt</button>
+    <button class="btn ghost block" data-act="item-new">Type it in</button></div>`;
 }
 on('add-open', () => openSheet(() => `<h2>Add food</h2>
-  <p class="sub">${hasAI() ? 'Take a photo of one food or a whole shelf and Claude lists what it sees.' : 'Take a photo of one food at a time, like a banana or a head of broccoli. Packaged foods work best with the barcode.'}</p>
+  <p class="sub">${hasAI() ? 'Take a photo of a drawer, shelf or counter and Claude lists every food it sees.' : 'Take a photo of a drawer, shelf or counter. Fresh produce is recognized best; packaged foods may need typing.'}</p>
   <div style="margin-top:14px">${addOptions()}</div>`));
 
 on('fridge-search', (el) => { q = el.value; $('#fridge-list').innerHTML = listHtml(); });
@@ -316,6 +316,7 @@ export function openReview(items, source) {
     return `<h2>Review ${review.items.length} ${review.items.length === 1 ? 'item' : 'items'}</h2>
     <p class="sub">${esc(review.source)}. Fix anything that looks off before it goes in your fridge.${flagged ? ` <b>${flagged} ${flagged === 1 ? 'needs' : 'need'} a quick look.</b>` : ''}</p>
     <div class="stack tight" style="margin-top:12px">${review.items.map((it) => reviewRow(it, review.selected.has(it.id))).join('') || '<p class="muted center">Everything was removed.</p>'}</div>
+    <button class="btn ghost block" style="margin-top:10px" data-act="rv-add">+ Add a missed item</button>
     <div class="sticky-bar"><button class="btn ghost" data-act="rv-merge" ${review.selected.size < 2 ? 'disabled' : ''}>Merge ${review.selected.size > 1 ? review.selected.size : ''}</button>
       <button class="btn dark grow" data-act="rv-confirm" ${review.items.length ? '' : 'disabled'}>Add ${food} to fridge</button></div>`;
   }, { full: true });
@@ -340,6 +341,7 @@ on('rv-edit', (el) => {
   it.conf = 1;
   sh.refresh();
 });
+on('rv-add', (el) => { review.items.push(finishItem({ raw: '', name: '', qty: 1, unit: 'each', conf: 0 })); sheetOf(el).refresh(); });
 on('rv-del', (el) => {
   const it = rvItem(el), idx = review.items.indexOf(it), sh = sheetOf(el);
   review.items.splice(idx, 1); review.selected.delete(it.id); sh.refresh();
