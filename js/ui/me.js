@@ -3,7 +3,7 @@ import { state, commit, save, today, addDays, uid, resetAll, replaceAll, parseYm
 import { AGE_GROUPS, GOAL_MIN, GOAL_MAX, GUIDELINE_SOURCE, SOURCE, zero, addInto } from '../lib/nutrition.js';
 import { CUISINES } from '../lib/recipes.js';
 import { getKey, setKey, hasAI, MODELS } from '../lib/ai.js';
-import { loadSample, clearSample } from '../data/seed.js';
+import { syncStatus, joinFamily, leaveFamily, syncNow, resetShadow } from '../lib/sync.js';
 import { $, esc, on, render as redraw, registerView, openSheet, sheetOf, toast, withUndo, fields, options, num, cap } from './dom.js';
 
 let who = null; // selected family member id
@@ -66,8 +66,9 @@ function render() {
       <button class="li" data-act="prefs-edit"><span class="emo">🍽️</span><span class="grow"><span class="nm">Food preferences</span><br><span class="muted small">${h.size} people · ${esc(list(h.cuisines)) || 'any cuisine'} · weeknights ${h.weeknightMinutes} min${h.allergies.length ? ' · allergies: ' + esc(list(h.allergies)) : ''}</span></span><span class="muted">Edit</span></button>
     </div></div>
     <div class="sec"><h2>Settings</h2><div class="list">
+      <button class="li" data-act="sync-open"><span class="emo">👨‍👩‍👧‍👦</span><span class="grow"><span class="nm">Family sync</span><br><span class="muted small">${esc(syncLine())}</span></span><span class="muted">${syncStatus.on ? 'Open' : 'Set up'}</span></button>
       <button class="li" data-act="ai-edit"><span class="emo">✨</span><span class="grow"><span class="nm">Claude receipt reading</span><br><span class="muted small">${hasAI() ? 'On. Receipts are read by Claude.' : 'Off. Add an API key for the most accurate scans.'}</span></span><span class="muted">${hasAI() ? 'Change' : 'Set up'}</span></button>
-      <button class="li" data-act="data-open"><span class="emo">💾</span><span class="grow"><span class="nm">Backup and data</span><br><span class="muted small">Save a backup, move to another phone, clear sample data</span></span><span class="muted">Open</span></button>
+      <button class="li" data-act="data-open"><span class="emo">💾</span><span class="grow"><span class="nm">Backup and data</span><br><span class="muted small">Save a backup file or start over</span></span><span class="muted">Open</span></button>
       <button class="li" data-act="about-open"><span class="emo">ℹ️</span><span class="grow"><span class="nm">About the numbers</span><br><span class="muted small">Where nutrition, recipes, prices and brands come from</span></span><span class="muted">Read</span></button>
     </div></div>`;
 }
@@ -174,14 +175,48 @@ on('ai-edit', () => openSheet(() => `<h2>Claude receipt reading</h2>
 on('ai-save', (el) => { const sh = sheetOf(el), f = fields(sh.body); setKey(f.key); state.settings.model = f.model; commit(); sh.close(); toast(f.key ? 'Claude is set up' : 'Saved'); });
 on('ai-clear', (el) => { setKey(''); commit(); sheetOf(el).close(); toast('Key removed'); });
 
+// ---------------- Family sync ----------------
+const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : `${Math.round(m / 1440)} days ago`; };
+function syncLine() {
+  if (!syncStatus.on) return 'Off. Share one fridge, plan and list across the family\'s phones.';
+  if (syncStatus.state === 'error') return `On as “${syncStatus.name}”. ${syncStatus.error}`;
+  return `On as “${syncStatus.name}”. ${syncStatus.last ? 'Synced ' + ago(syncStatus.last) : 'Syncing…'}`;
+}
+let joining = false, joinError = '';
+on('sync-open', () => openSheet(() => (syncStatus.on
+  ? `<h2>Family sync</h2><p class="sub">This phone shares its fridge, recipes, plan, shopping list and food log with everyone signed in to “${esc(syncStatus.name)}”.</p>
+    <div class="stack" style="margin-top:12px">
+      <p class="note ${syncStatus.state === 'error' ? 'red' : ''}">${syncStatus.state === 'error' ? esc(syncStatus.error) : syncStatus.state === 'syncing' ? 'Syncing now…' : syncStatus.last ? `Last synced ${ago(syncStatus.last)}. Changes are sent within a few seconds and other phones pick them up within about 30 seconds.` : 'Waiting for the first sync.'}</p>
+      <button class="btn dark block" data-act="sync-now">Sync now</button>
+      <p class="muted small">To add a phone: open Fridge on it, go to Me, Family sync, and enter the same family name and password.</p>
+      <button class="btn danger block" data-act="sync-leave">Stop syncing on this phone</button></div>`
+  : `<h2>Family sync</h2><p class="sub">Pick a family name and a password. Enter the same two on every phone and they all share one fridge, recipes, meal plan, shopping list and food log.</p>
+    <div class="stack" style="margin-top:12px" data-form="sync">
+      <label class="field"><span>Family name</span><input class="input" name="name" autocomplete="off" autocapitalize="none" placeholder="for example: the-rajesh-kitchen"></label>
+      <label class="field"><span>Family password (8 or more characters)</span><input class="input" name="password" type="text" autocomplete="off" autocapitalize="none" placeholder="something only your family knows"></label>
+      ${joinError ? `<p class="note red">${esc(joinError)}</p>` : ''}
+      <button class="btn dark block" data-act="sync-join" ${joining ? 'disabled' : ''}>${joining ? 'Connecting…' : 'Turn on family sync'}</button>
+      <p class="note">Your data is locked with the password on this phone before it is sent, so the sync servers only ever hold scrambled text. Pick a password nobody could guess, because anyone with the name and password can see and change your family's data. What is already on this phone is combined with the family's data. Claude API keys stay on each phone.</p></div>`)));
+on('sync-join', async (el) => {
+  const sh = sheetOf(el), f = fields(sh.body);
+  joining = true; joinError = ''; sh.refresh();
+  try {
+    const { found } = await joinFamily(f.name || '', f.password || '');
+    joining = false; sh.close(); commit();
+    toast(found ? 'Connected. Your family\'s data is now on this phone.' : 'Family sync is on. Enter the same name and password on the other phones.');
+  } catch (e) { joining = false; joinError = e.message; sh.refresh(); }
+});
+on('sync-now', async (el) => { const sh = sheetOf(el); const p = syncNow(); sh.refresh(); await p; sh.refresh(); redraw(); });
+on('sync-leave', (el) => { leaveFamily(); sheetOf(el).close(); redraw(); toast('Sync is off on this phone. Your data is still here.'); });
+document.addEventListener('fridge-sync', () => { const row = document.querySelector('[data-act="sync-open"] .muted.small'); if (row) row.textContent = syncLine(); });
+
 // ---------------- Data ----------------
 on('data-open', () => openSheet(() => `<h2>Backup and data</h2>
-  <p class="sub">Everything is saved on this device. To use the same data on another phone, save a backup here and load it there.</p>
+  <p class="sub">Everything is saved on this phone. To share it with the family's other phones, use Family sync. A backup file is a spare copy you keep yourself.</p>
   <div class="stack" style="margin-top:12px">
     <button class="btn dark block" data-act="data-export">Save a backup file</button>
     <label class="btn block">Load a backup file<input type="file" accept="application/json,.json" hidden data-change="data-import"></label>
-    ${state.sample ? '<button class="btn soft block" data-act="data-clear-sample">Clear sample data</button>' : '<button class="btn soft block" data-act="data-load-sample">Load sample data</button>'}
-    <button class="btn danger block" data-act="data-reset">Erase everything and start fresh</button></div>`));
+    <button class="btn danger block" data-act="data-reset">Erase everything on this phone</button></div>`));
 on('data-export', () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(state)], { type: 'application/json' }));
@@ -200,9 +235,14 @@ on('data-import', async (el) => {
     withUndo('Backup loaded', () => replaceAll(data));
   } catch { toast('That file is not a Fridge backup.'); }
 });
-on('data-clear-sample', (el) => { sheetOf(el).close(); withUndo('Sample data cleared', clearSample); });
-on('data-load-sample', (el) => { sheetOf(el).close(); withUndo('Sample data loaded', loadSample); });
-on('data-reset', (el) => { sheetOf(el).close(); withUndo('Everything erased', resetAll); });
+on('data-reset', (el) => {
+  sheetOf(el).close();
+  // Erasing is for this phone only: leave family sync first so the rest of the family keeps their data.
+  const wasSyncing = syncStatus.on;
+  leaveFamily();
+  withUndo(wasSyncing ? 'Everything erased on this phone. Family sync was turned off here.' : 'Everything erased', resetAll);
+  resetShadow();
+});
 
 on('about-open', () => openSheet(() => `<h2>About the numbers</h2>
   <div class="stack" style="margin-top:12px">

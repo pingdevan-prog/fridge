@@ -120,6 +120,7 @@ export function parseIngredient(raw) {
   if (words[0] && words[0].toLowerCase() === 'of') words.shift();
   while (words.length > 1 && SIZE_WORDS.has(words[0].toLowerCase())) words.shift();
   let name = words.join(' ').replace(/\([^)]*\)/g, '').split(',')[0].trim();
+  name = name.replace(/\s+(to taste|as needed|for serving|to serve|for garnish)$/i, '').trim();
   if (qty && !unit) unit = 'each';
   return { qty, unit, name: name || String(raw).trim(), raw: String(raw).trim() };
 }

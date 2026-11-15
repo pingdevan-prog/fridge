@@ -6,13 +6,14 @@ It is a single-page web app with no build step and no server. Open it on a phone
 
 ## What it does
 
-- **Scan a receipt.** Take a photo or upload a screenshot of an H-E-B receipt. Abbreviated names such as `HEB ORG BNLS CKN BRST` become "H-E-B Organics Boneless Chicken Breast". You review every item before it goes into the fridge.
-- **Fridge.** Fridge, Freezer, Pantry and Spices & Staples shelves, with estimated best-before dates and a "Use these soon" row.
-- **Meals.** Real recipes from the web plus built-in starter recipes, ranked by how many ingredients you already have, family preferences and ratings, food about to expire, and how healthy they are.
-- **Plan.** A 7-day plan of breakfast, lunch and dinner. Lock, swap, drag and drop, and rebuild only the unlocked meals. Leftovers are planned for the next day's lunch.
+- **Add food four ways.** Take a photo of a food (a banana, a head of broccoli), scan a barcode, scan an H-E-B receipt, or type it in. Everything passes through a review screen before it goes into the fridge.
+- **Fridge.** Fridge, Freezer, Pantry and Spices & Staples shelves, with estimated best-before dates and a "Use these soon" row. The app starts empty: it holds only what your family adds.
+- **Meals.** Write your family's own recipes in the recipe editor. You can also search the web and save a recipe to My recipes. Recipes are ranked by how many ingredients you already have, family preferences and ratings, food about to expire, and how healthy they are.
+- **Plan.** A 7-day plan of breakfast, lunch and dinner built only from My recipes. Lock, swap, drag and drop, and rebuild only the unlocked meals. Leftovers are planned for the next day's lunch.
 - **Shop.** What the plan needs minus what is in the fridge, grouped by H-E-B store section, with brand suggestions and an estimated total.
 - **Cooking mode.** Pick servings, amounts scale, big step-by-step text with timers, screen stays on. "Done cooking" subtracts what you used from the fridge and logs the calories.
 - **Me.** Calories and macros per family member for today and the last 7 days, plus a weekly healthy-eating summary.
+- **Family sync.** Enter the same family name and password on every phone and they share one fridge, recipes, plan, shopping list and food log.
 
 ## Where the data comes from
 
@@ -22,10 +23,16 @@ It is a single-page web app with no build step and no server. Open it on a phone
 | Calorie ranges | Dietary Guidelines for Americans 2020-2025 |
 | Web recipes | TheMealDB, with a link to each recipe's original source |
 | Receipt reading | Claude vision when you add your own Anthropic API key; otherwise on-device OCR (Tesseract.js) plus an H-E-B abbreviation dictionary |
+| Food photos | Claude vision with an API key (can list several foods in one photo); otherwise an on-device image model (MobileNet) that knows common whole foods, one per photo |
+| Barcodes | Open Food Facts, a free open product database (name, size, nutrition) |
 | Prices | What you paid on scanned receipts when available, otherwise rough estimates. Never H-E-B's actual prices |
 | Brands | H-E-B store-brand lines, marked "unverified" until checked on heb.com |
 
-Everything is stored in the browser on the device (localStorage). Use **Me > Backup and data** to save a backup file or move data to another phone. The Anthropic API key, if you add one, is kept only in that browser and is not part of backups.
+Everything is stored in the browser on the device (localStorage), and each phone keeps a full copy. The Anthropic API key, if you add one, is kept only in that browser and is never synced or put in backups.
+
+## How family sync works
+
+There is no server of our own. Each phone encrypts the family's data with a key derived from the family password (AES-GCM) and stores the scrambled result on a few free public relay servers (the Nostr network). Other phones signed in with the same family name and password download it, unlock it and merge it record by record, so changes made on two phones at once are combined (the newer change to the same item wins). The relays only ever see scrambled text. They are free public infrastructure with no uptime promise, which is why every phone keeps its own full copy and re-uploads it if the relays ever lose it. Use a password nobody could guess: anyone with the family name and password can read and change the data.
 
 ## Run it on your computer
 
@@ -41,9 +48,9 @@ Then open http://localhost:5178.
 index.html, css/styles.css     page shell and design
 js/app.js                      start-up
 js/store.js                    saved data and the data model
-js/data/                       food table, H-E-B knowledge, starter recipes, sample data
-js/lib/                        units, matching, nutrition, receipts, recipes, planner, shopping, Claude
-js/ui/                         one file per tab, plus cooking mode
+js/data/                       food table, H-E-B knowledge
+js/lib/                        units, matching, nutrition, receipts, recipes, planner, shopping, sync, Claude
+js/ui/                         one file per tab, plus cooking mode and photo/barcode capture
 sw.js, manifest.webmanifest    install to home screen, offline app shell
 ```
 

@@ -1,6 +1,6 @@
 // Plan tab: 7 days of breakfast, lunch and dinner. Swap, lock, drag and drop, regenerate.
 import { state, commit, today, addDays } from '../store.js';
-import { weekStart, weekDates, entryAt, generateWeek, dayTotals, alternatives, setEntry, removeEntry, moveEntry, dayName, SLOTS, targetKcal } from '../lib/planner.js';
+import { weekStart, weekDates, entryAt, generateWeek, dayTotals, alternatives, setEntry, removeEntry, moveEntry, dayName, SLOTS, targetKcal, planPool } from '../lib/planner.js';
 import { getRecipe } from '../lib/recipes.js';
 import { openRecipe, recipeCard, thumb, timeText } from './meals.js';
 import { esc, on, ui, go, render as redraw, registerView, openSheet, sheetOf, toast, withUndo, cap, shortDate, num } from './dom.js';
@@ -26,15 +26,19 @@ function render() {
   const target = targetKcal(), size = state.household.size;
   const head = `<div class="top"><div><h1>Plan</h1><p class="sub">Week of ${esc(shortDate(ws))}${ws === weekStart() ? ' (this week)' : ''}</p></div>
     <div class="rowf"><button class="icon-btn" data-act="plan-week" data-d="-7" aria-label="Previous week">‹</button><button class="icon-btn" data-act="plan-week" data-d="7" aria-label="Next week">›</button></div></div>`;
+  const pool = planPool().length;
   if (!entries.length) {
     return `${head}<div class="card empty"><div class="big">🗓️</div><h2>No meals planned yet</h2>
-      <p class="muted">Build a full week of breakfast, lunch and dinner from what your family likes and what is in your fridge.</p>
-      <button class="btn dark block" data-act="plan-generate">Build my week</button></div>`;
+      ${pool ? `<p class="muted">Build a week of breakfast, lunch and dinner from your ${pool} ${pool === 1 ? 'recipe' : 'recipes'}, what your family likes and what is in your fridge.</p>
+        <button class="btn dark block" data-act="plan-generate">Build my week</button>`
+      : `<p class="muted">The plan is built from your own recipes. Add a few first, then come back and build your week.</p>
+        <button class="btn dark block" data-act="recipe-new">＋ Add a recipe</button>`}</div>`;
   }
   return `${head}
     <div class="stack tight">
       <button class="btn dark block" data-act="plan-generate">Rebuild unlocked meals</button>
       <label class="check small"><input type="checkbox" data-change="plan-repeats" ${state.household.allowRepeats ? 'checked' : ''}> Allow the same dish more than once a week</label>
+      ${pool < 21 ? `<p class="note">You have ${pool} ${pool === 1 ? 'recipe' : 'recipes'}. A week has 21 meals, so some dishes repeat or some slots stay empty until you add more.</p>` : ''}
       <p class="muted small">Lock 🔒 the meals you like, swap 🔁 any meal, or drag ⠿ a meal to another day. Calories are per person for planned meals, snacks not included. Your family's average target is about ${num(target)} a day.</p>
     </div>
     <div class="stack" style="margin-top:14px">${dates.map((d) => {
@@ -51,7 +55,7 @@ function render() {
 registerView('plan', render);
 
 on('plan-week', (el) => { ws = addDays(ws, Number(el.dataset.d)); redraw(); window.scrollTo(0, 0); });
-on('plan-generate', () => withUndo('Your week is planned. Locked meals were kept.', () => generateWeek(ws)));
+on('plan-generate', () => { if (!planPool().length) { toast('Add a recipe in Meals first.'); return; } withUndo('Your week is planned. Locked meals were kept.', () => generateWeek(ws)); });
 on('plan-repeats', (el) => { state.household.allowRepeats = el.checked; commit(); });
 on('plan-lock', (el) => { const e = state.plan.find((x) => x.id === el.dataset.id); e.locked = !e.locked; commit(); toast(e.locked ? 'Locked. This meal stays when you rebuild.' : 'Unlocked'); });
 on('plan-open', (el) => { const e = state.plan.find((x) => x.id === el.dataset.id); openRecipe(e.recipeId, { entryId: e.id }); });

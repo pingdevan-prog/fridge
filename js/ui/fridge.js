@@ -1,13 +1,11 @@
 // Fridge tab: inventory shelves, item editor, receipt scanning and the review screen.
 import { state, commit, addToFridge, deductFromItem, expiringSoon, estimateExpiry, today, daysBetween, uid, round2 } from '../store.js';
 import { FOOD, LOCATIONS, CATEGORIES, CAT_EMOJI, CAT_DEFAULTS } from '../data/foods.js';
-import { SAMPLE_RECEIPT } from '../data/heb.js';
-import { clearSample } from '../data/seed.js';
 import { findFood } from '../lib/match.js';
 import { UNITS, fmtAmount } from '../lib/units.js';
 import { itemNutrition, eatNutrition, usdaSearch } from '../lib/nutrition.js';
 import { parseReceiptText, finishItem, splitBrand, mergeItems } from '../lib/receipt.js';
-import { hasAI, aiParseReceipt } from '../lib/ai.js';
+import { hasAI, aiParseReceipt, aiIdentifyFoods } from '../lib/ai.js';
 import { checkOffFromReceipt } from '../lib/shopping.js';
 import { $, esc, on, ui, go, render as redraw, registerView, openSheet, sheetOf, toast, withUndo, fields, expiryText, fmtDate, options, money } from './dom.js';
 
@@ -40,17 +38,15 @@ function listHtml() {
 
 function render() {
   const exp = expiringSoon(3);
-  const banner = state.sample ? `<div class="banner"><span class="grow">This is sample data so you can try everything.</span><button class="btn sm" data-act="sample-clear">Clear sample data</button></div>` : '';
   if (!state.fridge.length) {
-    return `${banner}<div class="top"><h1>Fridge</h1></div>
+    return `<div class="top"><h1>Fridge</h1></div>
       <div class="card empty"><div class="big">🧊</div><h2>Your fridge is empty</h2>
-      <p class="muted">Scan your first H-E-B receipt to fill your fridge!</p>
-      <button class="btn dark block" data-act="scan-open">📷 Scan receipt</button>
-      <button class="btn ghost block" data-act="item-new">Add an item by hand</button></div>`;
+      <p class="muted">Add the food you have at home. Snap a photo of each food, scan a barcode, or scan your H-E-B receipt after shopping.</p>
+      ${addOptions()}</div>`;
   }
-  return `${banner}
+  return `
     <div class="top"><div><h1>Fridge</h1><p class="sub">${state.fridge.filter((i) => i.qty > 0).length} foods at home</p></div>
-      <button class="btn sm soft" data-act="item-new">＋ Add item</button></div>
+      <button class="btn sm soft" data-act="item-new"><span>✏️</span>Type it in</button></div>
     ${exp.length ? `<section class="expiring"><div class="rowf"><h2 class="grow">Use these soon</h2><button class="btn sm dark" data-act="cook-expiring">Find recipes</button></div>
       <div class="scroller" style="margin-top:10px">${exp.map((i) => tile(i, true)).join('')}</div></section>` : ''}
     <div class="stack tight" style="margin-top:14px">
@@ -59,14 +55,25 @@ function render() {
     </div>
     <div id="fridge-list">${listHtml()}</div>
     ${state.householdItems.length ? `<div class="sec"><button class="li" data-act="household-open"><span class="emo">🧻</span><span class="grow nm">Household items</span><span class="muted">${state.householdItems.length}</span></button></div>` : ''}
-    <button class="fab" data-act="scan-open"><span>📷</span>Scan receipt</button>`;
+    <button class="fab" data-act="add-open"><span>📷</span>Add food</button>`;
 }
 registerView('fridge', render);
+
+/** The four ways to get food into the fridge. */
+function addOptions() {
+  return `<div class="stack" style="width:100%">
+    <label class="btn dark block"><span>📷</span>Photo of a food<input type="file" accept="image/*" capture="environment" hidden data-change="food-photo"></label>
+    <button class="btn block" data-act="barcode-open"><span>🔎</span>Scan a barcode</button>
+    <button class="btn soft block" data-act="scan-open"><span>🧾</span>Scan a receipt</button>
+    <button class="btn ghost block" data-act="item-new"><span>✏️</span>Type it in</button></div>`;
+}
+on('add-open', () => openSheet(() => `<h2>Add food</h2>
+  <p class="sub">${hasAI() ? 'Take a photo of one food or a whole shelf and Claude lists what it sees.' : 'Take a photo of one food at a time, like a banana or a head of broccoli. Packaged foods work best with the barcode.'}</p>
+  <div style="margin-top:14px">${addOptions()}</div>`));
 
 on('fridge-search', (el) => { q = el.value; $('#fridge-list').innerHTML = listHtml(); });
 on('fridge-loc', (el) => { loc = el.dataset.loc; redraw(); });
 on('cook-expiring', () => { ui.mealsFilter = { useExpiring: true }; go('meals'); });
-on('sample-clear', () => withUndo('Sample data cleared', clearSample));
 on('household-open', () => openSheet(() => `<h2>Household items</h2><p class="sub">Non-food things from your receipts.</p>
   <div class="list" style="margin-top:12px">${state.householdItems.map((h) => `<div class="li"><span class="emo">🧻</span><span class="grow"><span class="nm">${esc(h.name)}</span><br><span class="muted small">${esc(fmtAmount(h.qty, h.unit))} · ${esc(fmtDate(h.addedAt))}${h.price != null ? ' · ' + money(h.price) : ''}</span></span>
     <button class="icon-btn clear" data-act="household-del" data-id="${h.id}" aria-label="Remove">✕</button></div>`).join('') || '<p class="muted">Nothing here.</p>'}</div>`));
@@ -134,7 +141,7 @@ function itemSheet(item) {
   return sheet;
 }
 
-on('item-new', () => itemSheet(null));
+on('item-new', (el) => { sheetOf(el)?.close(); itemSheet(null); });
 on('item-open', (el) => { const item = state.fridge.find((i) => i.id === el.dataset.id); if (item) itemSheet(item); });
 on('item-nut-toggle', (el) => sheetOf(el).ctx.toggleNut());
 on('item-usda', (el) => sheetOf(el).ctx.usda());
@@ -163,7 +170,7 @@ on('item-save', (el) => {
   if (c.item) {
     const food = findFood(d.name);
     Object.assign(c.item, { name: d.name, brand: d.brand, qty: round2(d.qty ?? 0), unit: d.unit, location: d.location, category: d.category,
-      expiresAt: d.expiresAt || c.item.expiresAt, staple: d.staple, leftover: d.leftover, foodKey: d.leftover ? null : food?.key || null });
+      expiresAt: d.expiresAt || c.item.expiresAt, staple: d.staple, leftover: d.leftover, foodKey: d.leftover ? null : d.name === c.item.name ? c.item.foodKey : food?.key || null });
     if (nutrition) c.item.nutrition = nutrition; else delete c.item.nutrition;
     delete c.item.sample;
     commit(); toast('Saved');
@@ -214,19 +221,18 @@ on('eat-save', (el) => {
 // ---------------- Receipt scanning ----------------
 let review = null; // { items: [...], selected: Set, source }
 
-const openScan = () => openSheet(() => `<h2>Scan a receipt</h2>
+const openScan = (el) => { sheetOf(el)?.close(); return openSheet(() => `<h2>Scan a receipt</h2>
   <p class="sub">${hasAI() ? 'Claude will read your receipt and name every item.' : 'Your receipt is read on this device. For the most accurate results, add a Claude API key in Me, under Settings.'}</p>
   <div class="stack" style="margin-top:14px">
     <label class="btn dark block">📷 Take a photo<input type="file" accept="image/*" capture="environment" hidden data-change="scan-file"></label>
     <label class="btn block">🖼 Upload an image or screenshot<input type="file" accept="image/*" hidden data-change="scan-file"></label>
     <button class="btn ghost block" data-act="scan-paste">Paste receipt text</button>
-    <button class="btn soft block" data-act="scan-sample">Try the sample receipt</button>
     <p class="muted small">Tip: lay the receipt flat in good light and fill the frame. Long receipts work best as two photos.</p>
-  </div>`);
+  </div>`); };
 on('scan-open', openScan);
 
 /** Shrink a photo so it uploads fast, and return it as a JPEG data URL. */
-async function toDataUrl(file, max = 1800) {
+export async function toDataUrl(file, max = 1800) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('That file is not an image the app can open.')); i.src = url; });
@@ -270,9 +276,8 @@ on('scan-file', async (el) => {
     openReview(items, hasAI() ? 'Read by Claude' : 'Read on this device');
   } catch (e) { error = e.message || 'Something went wrong while reading the receipt.'; sheet.refresh(); }
 });
-on('scan-open-again', (el) => { sheetOf(el)?.close(); openScan(); });
+on('scan-open-again', (el) => openScan(el));
 
-on('scan-sample', (el) => { sheetOf(el)?.close(); openReview(parseReceiptText(SAMPLE_RECEIPT), 'Sample receipt (prices are examples)'); });
 on('scan-paste', (el) => {
   sheetOf(el)?.close();
   openSheet(() => `<h2>Paste receipt text</h2><p class="sub">Copy the text of a digital H-E-B receipt and paste it here.</p>
@@ -290,7 +295,7 @@ function reviewRow(it, selected) {
   const where = it.isFood ? it.location : 'household';
   return `<div class="rv ${flag ? 'flag' : ''}" data-id="${it.id}">
     <div class="r1"><input type="checkbox" aria-label="Select to merge" data-change="rv-select" ${selected ? 'checked' : ''}>
-      <input class="input" value="${esc(it.name)}" data-change="rv-edit" data-f="name" aria-label="Name">
+      <input class="input" value="${esc(it.name)}" placeholder="Type what it is" data-change="rv-edit" data-f="name" aria-label="Name">
       <button class="icon-btn clear" data-act="rv-del" aria-label="Remove ${esc(it.name)}">✕</button></div>
     <div class="r2">
       <input class="input" type="number" inputmode="decimal" min="0" step="any" value="${it.qty}" data-change="rv-edit" data-f="qty" aria-label="Amount">
@@ -304,11 +309,11 @@ function reviewRow(it, selected) {
   </div>`;
 }
 
-function openReview(items, source) {
+export function openReview(items, source) {
   review = { items, selected: new Set(), source };
   openSheet(() => {
     const flagged = review.items.filter((i) => i.conf < 0.7).length, food = review.items.filter((i) => i.isFood).length;
-    return `<h2>Review ${review.items.length} items</h2>
+    return `<h2>Review ${review.items.length} ${review.items.length === 1 ? 'item' : 'items'}</h2>
     <p class="sub">${esc(review.source)}. Fix anything that looks off before it goes in your fridge.${flagged ? ` <b>${flagged} ${flagged === 1 ? 'needs' : 'need'} a quick look.</b>` : ''}</p>
     <div class="stack tight" style="margin-top:12px">${review.items.map((it) => reviewRow(it, review.selected.has(it.id))).join('') || '<p class="muted center">Everything was removed.</p>'}</div>
     <div class="sticky-bar"><button class="btn ghost" data-act="rv-merge" ${review.selected.size < 2 ? 'disabled' : ''}>Merge ${review.selected.size > 1 ? review.selected.size : ''}</button>
@@ -323,6 +328,7 @@ on('rv-edit', (el) => {
     // Re-match the corrected name against the food table.
     const { name } = splitBrand(el.value.trim());
     const again = finishItem({ raw: it.raw, name, brand: splitBrand(el.value.trim()).brand, qty: it.qty, unit: it.unit, price: it.price, conf: 1, isFood: it.isFood ? undefined : false });
+    it.noFood = false; // the name was typed by hand, so match it normally
     Object.assign(it, { name: again.name, foodKey: again.foodKey, category: again.category, location: again.location, isFood: again.isFood, conf: 1 });
   } else if (f === 'qty') it.qty = Number(el.value) || 0;
   else if (f === 'price') it.price = el.value === '' ? null : Number(el.value);
@@ -350,15 +356,16 @@ on('rv-merge', (el) => {
   toast(`Merged into ${picked[0].name}`, { undo: () => { review.items = before; sh.refresh(); } });
 });
 on('rv-confirm', (el) => {
+  if (review.items.some((i) => !i.name.trim())) { toast('One item has no name yet. Type what it is, or remove it.'); return; }
   const items = review.items.filter((i) => i.qty > 0);
   const food = items.filter((i) => i.isFood);
   sheetOf(el).close();
   let ticked = 0;
-  withUndo(() => `${food.length} foods added to your fridge.${ticked ? ` ${ticked} shopping list ${ticked === 1 ? 'item' : 'items'} checked off.` : ''}`, () => {
+  withUndo(() => `${food.length} ${food.length === 1 ? 'food' : 'foods'} added to your fridge.${ticked ? ` ${ticked} shopping list ${ticked === 1 ? 'item' : 'items'} checked off.` : ''}`, () => {
     for (const it of items) {
       if (!it.isFood) { state.householdItems.push({ id: uid(), name: it.name, qty: it.qty, unit: it.unit, price: it.price, addedAt: today() }); continue; }
       const { brand, name } = splitBrand(it.name);
-      addToFridge({ name, brand, qty: it.qty, unit: it.unit, price: it.price ?? undefined, foodKey: it.foodKey, category: it.category, location: it.location });
+      addToFridge({ name, brand, qty: it.qty, unit: it.unit, price: it.price ?? undefined, foodKey: it.noFood ? false : it.foodKey, category: it.category, location: it.location, nutrition: it.nutrition });
       if (it.foodKey && it.price != null) state.prices[it.foodKey] = { price: it.price, qty: it.qty, unit: it.unit, date: today() };
     }
     ticked = checkOffFromReceipt(food);

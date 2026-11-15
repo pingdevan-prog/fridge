@@ -55,11 +55,12 @@ export function expandName(raw) {
 
 /**
  * Finish a partly-read item: find the food, pick category, shelf, quantity and unit, score confidence.
- * p: { raw, name, brand, price, weight?, count?, size?, qty?, unit?, category?, isFood?, conf?, known? }
+ * p: { raw, name, brand, price, weight?, count?, size?, qty?, unit?, category?, isFood?, conf?, known?, noFood? }
+ * noFood: a packaged product that should not be matched to a basic ingredient.
  */
 export function finishItem(p) {
   const nonFood = p.isFood === false || NONFOOD.test(p.name) || p.category === 'household';
-  const food = nonFood ? null : findFood(p.name);
+  const food = nonFood || p.noFood ? null : findFood(p.name);
   const category = nonFood ? 'household' : (food?.cat || (CATEGORIES[p.category] ? p.category : 'other'));
   const frozen = /\bfrozen\b/i.test(p.name);
   const location = nonFood ? null : frozen ? 'freezer' : (food?.loc || CAT_DEFAULTS[category]?.[0] || 'pantry');
@@ -75,7 +76,7 @@ export function finishItem(p) {
   const conf = p.conf != null ? p.conf : Math.min(1, (nonFood ? 0.45 : food ? 0.45 : 0) + 0.55 * (p.known ?? 0.5));
   return {
     id: uid(), raw: p.raw || '', name: [p.brand, p.name].filter(Boolean).join(' '), qty: Math.round(qty * 100) / 100, unit: unit || 'each',
-    price: p.price ?? null, foodKey: food?.key || null, category, location, isFood: !nonFood, conf, keep: true,
+    price: p.price ?? null, foodKey: food?.key || null, category, location, isFood: !nonFood, conf, keep: true, noFood: !!p.noFood,
   };
 }
 

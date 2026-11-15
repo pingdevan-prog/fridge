@@ -1,6 +1,6 @@
 // Weekly meal plan: breakfast, lunch and dinner for 7 days.
 import { state, uid, today, addDays, parseYmd } from '../store.js';
-import { localRecipes, getRecipe, buildCtx, scoreRecipe, violates, avgRating, keepRecipe } from './recipes.js';
+import { myRecipes, getRecipe, buildCtx, scoreRecipe, violates, avgRating, keepRecipe } from './recipes.js';
 import { AGE_GROUPS, zero, addInto } from './nutrition.js';
 
 export const SLOTS = ['breakfast', 'lunch', 'dinner'];
@@ -20,9 +20,9 @@ export function targetKcal() {
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 2000;
 }
 
-/** Recipes the planner may use: starters and saved recipes, minus allergy conflicts and meals the family disliked. */
-function planPool() {
-  return localRecipes().filter((r) => !violates(r) && !((avgRating(r.id)?.avg ?? 5) <= 2));
+/** Recipes the planner may use: only "My recipes", minus allergy conflicts and meals the family disliked. */
+export function planPool() {
+  return myRecipes().filter((r) => !violates(r) && !((avgRating(r.id)?.avg ?? 5) <= 2));
 }
 
 /** Leftover lunches must come after the dinner they came from; otherwise they become normal meals. */
@@ -44,7 +44,8 @@ export function generateWeek(ws) {
   fixLeftovers();
   const ctx = buildCtx(), pool = planPool(), target = targetKcal();
   const base = new Map(pool.map((r) => [r.id, scoreRecipe(r, ctx).score]));
-  const used = new Set(state.plan.filter((e) => dates.includes(e.date)).map((e) => e.recipeId));
+  const used = new Map(); // recipe id -> times used this week
+  for (const e of state.plan) if (dates.includes(e.date) && !e.leftoverOf) used.set(e.recipeId, (used.get(e.recipeId) || 0) + 1);
   let leftovers = state.plan.filter((e) => dates.includes(e.date) && e.leftoverOf).length, lastLeftover = -9;
 
   const pick = (slot, i, repeatsOk = allowRepeats) => {
@@ -55,7 +56,7 @@ export function generateWeek(ws) {
       if (!r.mealTypes.includes(slot)) continue;
       if (used.has(r.id) && !repeatsOk) continue;
       let s = base.get(r.id) + Math.random() * 0.25;
-      if (used.has(r.id)) s -= 0.35;
+      s -= 0.35 * (used.get(r.id) || 0); // with few recipes, spread the repeats evenly
       if (r.mealTypes[0] === slot) s += 0.08;
       if (weekday && slot === 'dinner' && r.totalMin > state.household.weeknightMinutes) s -= 0.4;
       if (weekday && slot === 'breakfast' && r.totalMin > 20) s -= 0.15;
@@ -67,7 +68,7 @@ export function generateWeek(ws) {
   };
   const add = (date, slot, r, extra = {}) => {
     const e = { id: uid(), date, slot, recipeId: r.id, servings: size, locked: false, ...extra };
-    state.plan.push(e); used.add(r.id); keepRecipe(r);
+    state.plan.push(e); if (!extra.leftoverOf) used.set(r.id, (used.get(r.id) || 0) + 1); keepRecipe(r);
     return e;
   };
 
@@ -77,7 +78,7 @@ export function generateWeek(ws) {
     const r = pick('dinner', i);
     if (!r) return;
     const e = add(date, 'dinner', r);
-    const batch = r.leftovers ?? (r.tags.includes('one-pot') && r.source !== 'starter');
+    const batch = r.leftovers ?? r.tags.includes('one-pot');
     if (batch && i < 6 && leftovers < 2 && i - lastLeftover > 1 && !entryAt(dates[i + 1], 'lunch')) {
       e.servings = size * 2; // cook double, eat the rest for lunch tomorrow
       add(dates[i + 1], 'lunch', r, { leftoverOf: e.id });

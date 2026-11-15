@@ -1,18 +1,18 @@
 // Meals tab: recipe suggestions, internet search, recipe details, favourites and ratings.
 import { state, commit, save, today, addDays, expiringSoon } from '../store.js';
 import { FOOD } from '../data/foods.js';
-import { CUISINES, MEAL_TYPES, FOOD_TYPES, localRecipes, getRecipe, keepRecipe, isFavorite, avgRating, buildCtx, scoreRecipe, matchesFilters, searchWeb, fromAI, violates, rateRecipe } from '../lib/recipes.js';
-import { fridgeStatus } from '../lib/match.js';
-import { scaleAmount, fmtAmount } from '../lib/units.js';
+import { CUISINES, MEAL_TYPES, FOOD_TYPES, myRecipes, getRecipe, keepRecipe, isFavorite, avgRating, buildCtx, scoreRecipe, matchesFilters, searchWeb, fromAI, violates, rateRecipe, saveCustomRecipe, deleteRecipe } from '../lib/recipes.js';
+import { fridgeStatus, findFood } from '../lib/match.js';
+import { scaleAmount, fmtAmount, parseIngredient } from '../lib/units.js';
 import { recipeNutrition, SOURCE } from '../lib/nutrition.js';
 import { weekStart, weekDates, entryAt, setEntry, dayName, SLOTS } from '../lib/planner.js';
 import { addManual } from '../lib/shopping.js';
 import { hasAI, aiFindRecipes } from '../lib/ai.js';
 import { startCooking } from './cook.js';
-import { $, esc, on, ui, go, render as redraw, registerView, openSheet, sheetOf, toast, cap, shortDate, options } from './dom.js';
+import { $, esc, on, ui, go, render as redraw, registerView, openSheet, sheetOf, toast, withUndo, fields, cap, shortDate, options } from './dom.js';
 
 const f = { q: '', cuisine: '', mealType: '', foodType: '', maxCal: 0 };
-let mode = 'all', web = [], webState = 'idle', webError = '', aiBusy = false, searchToken = 0, needSearch = true;
+let mode = 'mine', web = [], webState = 'idle', webError = '', aiBusy = false, searchToken = 0, needSearch = true;
 
 const stars = (n) => '★'.repeat(Math.round(n)) + '☆'.repeat(5 - Math.round(n));
 export const thumb = (r, cls = '') => (r.image
@@ -25,6 +25,7 @@ export const timeText = (r) => `${r.timeEstimated ? 'about ' : ''}${r.totalMin} 
 export function recipeCard(r, s, act = 'recipe-open', extra = '') {
   const rating = avgRating(r.id);
   const pct = s.total ? Math.round((s.have / s.total) * 100) : 0;
+  const mine = r.source === 'custom';
   return `<div class="rcard">
     <button class="rowf grow" style="align-items:flex-start;text-align:left;gap:12px" data-act="${act}" data-id="${r.id}" ${extra}>
       ${thumb(r)}
@@ -35,30 +36,31 @@ export function recipeCard(r, s, act = 'recipe-open', extra = '') {
         <span class="meta">${s.usesExp.length ? `<span class="badge red">Uses up ${esc(s.usesExp.slice(0, 2).join(', '))}</span>` : ''}
           ${rating ? `<span class="badge">${stars(rating.avg)}</span>` : ''}<span class="badge plain">${esc(r.cuisine)}</span></span>
       </span></button>
-    <button class="fav" data-act="recipe-fav" data-id="${r.id}" aria-label="${isFavorite(r.id) ? 'Remove from favorites' : 'Save to favorites'}">${isFavorite(r.id) ? '❤️' : '🤍'}</button>
+    ${mine ? '' : `<button class="fav" data-act="recipe-fav" data-id="${r.id}" aria-label="${isFavorite(r.id) ? 'Remove from My recipes' : 'Save to My recipes'}">${isFavorite(r.id) ? '❤️' : '🤍'}</button>`}
   </div>`;
 }
 
 function resultsHtml() {
   const ctx = buildCtx();
   const seen = new Set();
-  let list = [...localRecipes(), ...web].filter((r) => r && !seen.has(r.id) && seen.add(r.id));
-  list = mode === 'favorites' ? list.filter((r) => isFavorite(r.id)) : list.filter((r) => matchesFilters(r, f));
+  const pool = mode === 'mine' ? myRecipes() : web;
+  const list = pool.filter((r) => r && !seen.has(r.id) && seen.add(r.id)).filter((r) => matchesFilters(r, f));
   let scored = list.map((r) => ({ r, s: scoreRecipe(r, ctx) })).sort((a, b) => b.s.score - a.s.score);
   if (ui.mealsFilter?.useExpiring) scored = scored.filter((x) => x.s.usesExp.length);
   const cards = scored.slice(0, 40).map(({ r, s }) => recipeCard(r, s)).join('');
+  if (mode === 'mine') {
+    if (!myRecipes().length) return `<div class="card empty"><div class="big">📖</div><h2>Add your family's recipes</h2>
+      <p class="muted">Write down the meals you actually cook. The weekly plan and the shopping list are built from your recipes.</p>
+      <button class="btn dark block" data-act="recipe-new">＋ New recipe</button>
+      <button class="btn ghost block" data-act="meals-mode" data-m="web">Find recipes online</button></div>`;
+    return cards || `<div class="card empty"><div class="big">🍳</div><h2>No recipes match</h2><p class="muted">Try removing a filter.</p><button class="btn soft" data-act="meals-clear">Clear filters</button></div>`;
+  }
   let status = '';
-  if (mode === 'all') {
-    if (webState === 'loading') status = `<div class="skel"></div><p class="muted small center">Searching recipe sites…</p>`;
-    else if (webState === 'error') status = `<div class="note red">${esc(webError)} Showing the recipes saved on this device. <button class="link" data-act="meals-retry">Try again</button></div>`;
-    else if (webState === 'done') status = `<p class="muted small center">Web results come from TheMealDB. Calories are estimates from the ingredients.</p>
-      ${hasAI() ? `<button class="btn ghost block" data-act="meals-ai" ${aiBusy ? 'disabled' : ''}>${aiBusy ? 'Claude is searching the web…' : 'Search more recipe sites with Claude'}</button>` : ''}`;
-  }
-  if (!cards) {
-    return (mode === 'favorites'
-      ? `<div class="card empty"><div class="big">❤️</div><h2>No favorites yet</h2><p class="muted">Tap the heart on any recipe to save it here.</p></div>`
-      : `<div class="card empty"><div class="big">🍳</div><h2>No recipes match</h2><p class="muted">Try removing a filter or searching for something else.</p><button class="btn soft" data-act="meals-clear">Clear filters</button></div>`) + status;
-  }
+  if (webState === 'loading') status = `<div class="skel"></div><p class="muted small center">Searching recipe sites…</p>`;
+  else if (webState === 'error') status = `<div class="note red">${esc(webError)} <button class="link" data-act="meals-retry">Try again</button></div>`;
+  else if (webState === 'done') status = `<p class="muted small center">Results come from TheMealDB. Calories are estimates from the ingredients. Tap the heart to save one to My recipes.</p>
+    ${hasAI() ? `<button class="btn ghost block" data-act="meals-ai" ${aiBusy ? 'disabled' : ''}>${aiBusy ? 'Claude is searching the web…' : 'Search more recipe sites with Claude'}</button>` : ''}`;
+  if (!cards && webState === 'done') return `<div class="card empty"><div class="big">🍳</div><h2>No recipes match</h2><p class="muted">Try removing a filter or searching for something else.</p><button class="btn soft" data-act="meals-clear">Clear filters</button></div>` + status;
   return cards + status;
 }
 function updateResults() { const el = $('#meals-results'); if (el) el.innerHTML = resultsHtml(); }
@@ -80,31 +82,31 @@ async function runSearch() {
 const chipRow = (items, key) => `<div class="chips">${items.map(([v, l]) => `<button class="chip ${f[key] === v ? 'on' : ''}" data-act="meals-filter" data-k="${key}" data-v="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
 
 function render() {
-  if (needSearch && mode === 'all') queueMicrotask(runSearch);
-  const pick = ui.pickFor;
+  if (needSearch && mode === 'web') queueMicrotask(runSearch);
+  const pick = ui.pickFor, mineCount = myRecipes().length;
   const exp = ui.mealsFilter?.useExpiring ? expiringSoon(4).map((i) => i.name).slice(0, 4) : null;
-  return `<div class="top"><div><h1>Meals</h1><p class="sub">Ranked by what is already in your fridge</p></div></div>
+  return `<div class="top"><div><h1>Meals</h1><p class="sub">${mode === 'mine' ? 'Your recipes, best match for your fridge first' : 'Recipes from the web'}</p></div>
+      <button class="btn sm" data-act="recipe-new">＋ New recipe</button></div>
     ${pick ? `<div class="banner"><span class="grow">Choosing ${esc(pick.slot)} for ${esc(dayName(pick.date))} ${esc(shortDate(pick.date))}. Open a recipe and tap “Use this meal”.</span><button class="btn sm" data-act="meals-pick-cancel">Cancel</button></div>` : ''}
     ${exp ? `<div class="banner"><span class="grow">Recipes that use up: ${esc(exp.join(', '))}</span><button class="btn sm" data-act="meals-exp-off">Show all</button></div>` : ''}
     <div class="stack tight">
-      <form class="rowf" data-act="noop" onsubmit="return false"><input class="input grow" type="search" placeholder="Search recipes" value="${esc(f.q)}" data-change="meals-q" aria-label="Search recipes" enterkeyhint="search"><button class="btn" data-act="meals-go">Search</button></form>
-      ${chipRow([['', 'Any cuisine'], ...CUISINES.map((c) => [c, c])], 'cuisine')}
+      <div class="seg"><button class="${mode === 'mine' ? 'on' : ''}" data-act="meals-mode" data-m="mine">My recipes (${mineCount})</button><button class="${mode === 'web' ? 'on' : ''}" data-act="meals-mode" data-m="web">Find online</button></div>
+      <form class="rowf" onsubmit="return false"><input class="input grow" type="search" placeholder="${mode === 'mine' ? 'Search my recipes' : 'Search recipes online'}" value="${esc(f.q)}" data-change="meals-q" aria-label="Search recipes" enterkeyhint="search"><button class="btn" data-act="meals-go">Search</button></form>
+      ${mode === 'web' || mineCount > 3 ? `${chipRow([['', 'Any cuisine'], ...CUISINES.map((c) => [c, c])], 'cuisine')}
       ${chipRow([['', 'Any meal'], ...MEAL_TYPES.map((m) => [m, cap(m)])], 'mealType')}
       ${chipRow([['', 'Any type'], ...FOOD_TYPES], 'foodType')}
       <div class="rowf"><label class="field grow"><span>Most calories per serving</span>
-        <select class="input" data-change="meals-cal">${options([[0, 'No limit'], [300, '300'], [400, '400'], [500, '500'], [600, '600'], [700, '700'], [800, '800']].map(([v, l]) => [String(v), l]), String(f.maxCal))}</select></label></div>
-      <div class="seg"><button class="${mode === 'all' ? 'on' : ''}" data-act="meals-mode" data-m="all">Suggestions</button><button class="${mode === 'favorites' ? 'on' : ''}" data-act="meals-mode" data-m="favorites">Favorites (${state.favorites.length})</button></div>
+        <select class="input" data-change="meals-cal">${options([[0, 'No limit'], [300, '300'], [400, '400'], [500, '500'], [600, '600'], [700, '700'], [800, '800']].map(([v, l]) => [String(v), l]), String(f.maxCal))}</select></label></div>` : ''}
     </div>
     <div class="stack" id="meals-results" style="margin-top:14px">${resultsHtml()}</div>`;
 }
 registerView('meals', render);
 
-on('noop', () => {});
 on('meals-filter', (el) => { f[el.dataset.k] = el.dataset.v; needSearch = true; redraw(); });
 on('meals-q', (el) => { f.q = el.value.trim(); needSearch = true; redraw(); });
 on('meals-go', () => { f.q = $('[data-change="meals-q"]').value.trim(); needSearch = true; redraw(); });
 on('meals-cal', (el) => { f.maxCal = Number(el.value); updateResults(); });
-on('meals-mode', (el) => { mode = el.dataset.m; redraw(); });
+on('meals-mode', (el) => { mode = el.dataset.m; if (mode === 'web') needSearch = true; redraw(); });
 on('meals-clear', () => { Object.assign(f, { q: '', cuisine: '', mealType: '', foodType: '', maxCal: 0 }); needSearch = true; redraw(); });
 on('meals-retry', () => runSearch());
 on('meals-pick-cancel', () => { ui.pickFor = null; go('plan'); });
@@ -122,12 +124,79 @@ on('meals-ai', async () => {
 });
 on('recipe-fav', (el) => {
   const id = el.dataset.id, r = getRecipe(id);
-  if (isFavorite(id)) state.favorites = state.favorites.filter((x) => x !== id); else { state.favorites.push(id); keepRecipe(r); }
-  save();
-  const sh = sheetOf(el);
-  if (sh) sh.refresh();
-  if (ui.tab === 'meals') updateResults();
-  toast(isFavorite(id) ? 'Saved to favorites' : 'Removed from favorites');
+  if (isFavorite(id)) state.favorites = state.favorites.filter((x) => x !== id); else { keepRecipe(r); state.favorites.push(id); }
+  commit();
+  sheetOf(el)?.refresh();
+  toast(isFavorite(id) ? 'Saved to My recipes. The weekly plan can use it now.' : 'Removed from My recipes');
+});
+
+// ---------------- Recipe editor (the family's own recipes) ----------------
+const EMOJI = ['🍽️', '🍛', '🍲', '🥘', '🍝', '🌮', '🌯', '🥙', '🥗', '🍚', '🍜', '🍕', '🍔', '🥪', '🍗', '🥩', '🐟', '🍳', '🥞', '🥣', '🥤', '🍪'];
+const HAND_TAGS = [['kid-friendly', 'Kid friendly'], ['comfort', 'Comfort food'], ['one-pot', 'One pot']];
+// Split a text box into lines. Bullets are dropped; step numbers ("1. ", "2) ") are dropped only for steps,
+// because ingredient lines start with real amounts such as "1.5 cups".
+const lines = (text, numbered = false) => String(text || '').split(/\r?\n/)
+  .map((l) => l.replace(numbered ? /^\s*(?:[-*•]\s+|\d+[.)]\s+)/ : /^\s*[-*•]\s+/, '').trim()).filter(Boolean);
+
+function recipeEditor(r) {
+  const d = r ? { name: r.name, emoji: r.emoji, cuisine: r.cuisine, mealTypes: new Set(r.mealTypes), tags: new Set(r.userTags || []), servings: r.servings, prepMin: r.prepMin, cookMin: r.cookMin,
+    leftovers: !!r.leftovers, ingredients: r.ingredients.map((i) => i.raw || `${fmtAmount(i.qty, i.unit)} ${i.name}`.trim()).join('\n'), steps: r.steps.join('\n') }
+    : { name: '', emoji: '🍽️', cuisine: state.household.cuisines[0] || 'Other', mealTypes: new Set(['dinner']), tags: new Set(), servings: state.household.size, prepMin: 10, cookMin: 20, leftovers: false, ingredients: '', steps: '' };
+  let check = '';
+  const sheet = openSheet(() => `<h2>${r ? 'Edit recipe' : 'New recipe'}</h2><p class="sub">Your recipes are what the weekly plan is built from.</p>
+    <div class="stack" style="margin-top:12px" data-form="recipe">
+      <label class="field"><span>Name</span><input class="input" name="name" value="${esc(d.name)}" placeholder="Mom's chicken curry"></label>
+      <div><p class="field" style="margin-bottom:6px">Picture</p><div class="chips">${EMOJI.map((e) => `<button class="chip ${d.emoji === e ? 'on' : ''}" style="padding:0 12px;font-size:1.3rem" data-act="recipe-emoji" data-e="${e}">${e}</button>`).join('')}</div></div>
+      <div><p class="field" style="margin-bottom:6px">When do you eat it?</p><div class="chips wrap">${MEAL_TYPES.map((m) => `<button class="chip ${d.mealTypes.has(m) ? 'on' : ''}" data-act="recipe-toggle" data-k="mealTypes" data-v="${m}">${cap(m)}</button>`).join('')}</div></div>
+      <div class="grid2"><label class="field"><span>Cuisine</span><select class="input" name="cuisine">${options([...CUISINES, 'Other'], d.cuisine)}</select></label>
+        <label class="field"><span>Servings it makes</span><input class="input" name="servings" type="number" inputmode="numeric" min="1" max="24" value="${d.servings}"></label></div>
+      <div class="grid2"><label class="field"><span>Prep minutes</span><input class="input" name="prepMin" type="number" inputmode="numeric" min="0" value="${d.prepMin}"></label>
+        <label class="field"><span>Cook minutes</span><input class="input" name="cookMin" type="number" inputmode="numeric" min="0" value="${d.cookMin}"></label></div>
+      <label class="field"><span>Ingredients, one per line, amount first</span>
+        <textarea class="input" name="ingredients" style="min-height:170px" placeholder="1.5 lb chicken breast&#10;1 onion, chopped&#10;2 tbsp olive oil&#10;1 can diced tomatoes" data-change="recipe-check">${esc(d.ingredients)}</textarea></label>
+      ${check}
+      <label class="field"><span>Steps, one per line. Mention times like “simmer 10 minutes” to get timers</span>
+        <textarea class="input" name="steps" style="min-height:170px" placeholder="Brown the chicken for 6 minutes.&#10;Add the onion and cook 5 minutes.">${esc(d.steps)}</textarea></label>
+      <div><p class="field" style="margin-bottom:6px">Good to know</p><div class="chips wrap">${HAND_TAGS.map(([v, l]) => `<button class="chip ${d.tags.has(v) ? 'on' : ''}" data-act="recipe-toggle" data-k="tags" data-v="${v}">${l}</button>`).join('')}</div></div>
+      <label class="check"><input type="checkbox" name="leftovers" ${d.leftovers ? 'checked' : ''}> Makes good leftovers (plan them for lunch the next day)</label>
+      <div class="sticky-bar">${r ? '<button class="btn danger" data-act="recipe-delete">Delete</button>' : ''}<button class="btn dark grow" data-act="recipe-save">Save recipe</button></div>
+    </div>`, { full: true });
+  sheet.ctx = {
+    r, d,
+    read() { const v = fields($('[data-form="recipe"]', sheet.body)); Object.assign(d, v); },
+    /** Show how the app understood the ingredient lines, so mistakes are easy to spot. */
+    check() {
+      this.read();
+      const parsed = lines(d.ingredients).map((l) => parseIngredient(l));
+      const unknown = parsed.filter((i) => !findFood(i.name)).map((i) => i.name);
+      const noAmount = parsed.filter((i) => !i.qty).map((i) => i.name);
+      check = !parsed.length ? '' : `<p class="note">${parsed.length} ingredients read.${unknown.length ? ` Not in the food table, so no calories or auto-matching for: <b>${esc(unknown.join(', '))}</b>.` : ' All of them are recognized.'}${noAmount.length ? ` No amount found for: <b>${esc(noAmount.join(', '))}</b>.` : ''}</p>`;
+      sheet.refresh();
+    },
+  };
+  return sheet;
+}
+on('recipe-new', (el) => { sheetOf(el)?.close(); recipeEditor(null); });
+on('recipe-edit', (el) => { const sh = sheetOf(el), r = sh.ctx.r; sh.close(); recipeEditor(r); });
+on('recipe-emoji', (el) => { const sh = sheetOf(el); sh.ctx.read(); sh.ctx.d.emoji = el.dataset.e; sh.refresh(); });
+on('recipe-toggle', (el) => { const set = sheetOf(el).ctx.d[el.dataset.k], v = el.dataset.v; set.has(v) ? set.delete(v) : set.add(v); el.classList.toggle('on'); });
+on('recipe-check', (el) => sheetOf(el).ctx.check());
+on('recipe-save', (el) => {
+  const sh = sheetOf(el), c = sh.ctx;
+  c.read();
+  const d = c.d, ingredients = lines(d.ingredients), steps = lines(d.steps, true);
+  if (!d.name) { toast('Give the recipe a name.'); return; }
+  if (!ingredients.length) { toast('Add at least one ingredient.'); return; }
+  if (!steps.length) { toast('Add at least one step.'); return; }
+  const saved = saveCustomRecipe({ ...d, mealTypes: [...d.mealTypes], tags: [...d.tags], ingredients, steps }, c.r?.id);
+  mode = 'mine';
+  commit(); sh.close();
+  toast(`${saved.name} saved to My recipes`);
+});
+on('recipe-delete', (el) => {
+  const sh = sheetOf(el), r = sh.ctx.r;
+  sh.close();
+  withUndo(`${r.name} deleted`, () => deleteRecipe(r.id));
 });
 
 // ---------------- Recipe details ----------------
@@ -178,7 +247,8 @@ export function openRecipe(id, opts = {}) {
           <button class="icon-btn" data-act="recipe-rate" data-n="5" aria-label="Thumbs up">👍</button></div>
         ${others.length ? `<p class="muted small" style="margin-top:6px">${esc(others.join(' · '))}</p>` : '<p class="muted small" style="margin-top:6px">Ratings shape future suggestions and meal plans.</p>'}
       </div>
-      <button class="btn ghost block sec" data-act="recipe-fav" data-id="${r.id}">${isFavorite(r.id) ? '❤️ Saved to favorites' : '🤍 Save to favorites'}</button>`;
+      ${r.source === 'custom' ? '<button class="btn ghost block sec" data-act="recipe-edit">✏️ Edit this recipe</button>'
+        : `<button class="btn ghost block sec" data-act="recipe-fav" data-id="${r.id}">${isFavorite(r.id) ? '❤️ In My recipes' : '🤍 Save to My recipes'}</button>`}`;
   }, { full: true });
   sheet.ctx = { r, entry, get servings() { return servings; }, setServings(n) { servings = Math.max(1, Math.min(24, n)); sheet.refresh(); },
     get rater() { return rater; }, setRater(id) { rater = id; sheet.refresh(); } };

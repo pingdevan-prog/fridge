@@ -1,5 +1,4 @@
-// Recipes: starter set + saved recipes + live web search (TheMealDB), filtering and ranking.
-import { STARTER_RECIPES } from '../data/recipes.js';
+// Recipes: the family's own recipes, recipes saved from the web, live web search (TheMealDB), filtering and ranking.
 import { FOOD } from '../data/foods.js';
 import { parseIngredient, toGrams } from './units.js';
 import { findFood, fridgeStatus, tokens } from './match.js';
@@ -14,7 +13,7 @@ const CUISINE_GROUPS = { Mediterranean: ['Mediterranean', 'Greek', 'Turkish', 'M
 const MEAT_WORDS = /\b(chicken|beef|pork|bacon|ham|sausage|turkey|lamb|mutton|goat|veal|duck|fish|salmon|tuna|cod|shrimp|prawn|anchov|crab|lobster|mussel|clam|oyster|squid|chorizo|pepperoni|prosciutto|gelatin|steak|mince|meat)/i;
 const SPICY = new Set(['jalapeño', 'chili powder', 'red pepper flakes', 'curry powder']);
 
-const cache = new Map(); // id -> prepared recipe (starter, saved and this session's web results)
+const cache = new Map(); // id -> prepared recipe (saved recipes and this session's web results)
 
 /** Parse ingredient lines, attach foods, compute nutrition, health and automatic tags. Safe to call twice. */
 export function prep(r) {
@@ -25,7 +24,7 @@ export function prep(r) {
   });
   const nut = recipeNutrition(r);
   Object.assign(r, { nutrition: nut.per, nutCounted: nut.counted, nutTotal: nut.total, vegCount: nut.vegCount, totalMin: (r.prepMin || 0) + (r.cookMin || 0) });
-  const tags = new Set(r.tags || []);
+  const tags = new Set(r.userTags || r.tags || []); // userTags: the ones picked by hand on a family recipe
   const hasMeat = r.ingredients.some((i) => (i.foodKey && (FOOD[i.foodKey].meat || FOOD[i.foodKey].fish)) || (!i.foodKey && MEAT_WORDS.test(i.name)));
   if (!hasMeat) tags.add('vegetarian'); else tags.delete('vegetarian');
   const known = nut.total && nut.counted / nut.total >= 0.6;
@@ -47,20 +46,41 @@ export function prep(r) {
   cache.set(r.id, r);
   return r;
 }
-STARTER_RECIPES.forEach(prep);
-
 export function getRecipe(id) {
-  if (cache.has(id)) return cache.get(id);
   const saved = state.recipes?.[id];
-  return saved ? prep(saved) : null;
+  if (saved) return cache.get(id) === saved ? saved : prep(saved); // re-prepare if sync or undo swapped the object
+  return cache.get(id) || null;
 }
-/** Starter recipes plus everything saved on this device. */
+/** Every recipe saved on this device (the family's own, plus web recipes that were saved, planned, cooked or rated). */
 export function localRecipes() {
-  return [...STARTER_RECIPES, ...Object.keys(state.recipes || {}).map(getRecipe)];
+  return Object.keys(state.recipes || {}).map(getRecipe);
+}
+/** "My recipes": the ones the family wrote, plus web recipes saved as favorites. The weekly plan is built from these. */
+export function myRecipes() {
+  return localRecipes().filter((r) => r.source === 'custom' || state.favorites.includes(r.id));
+}
+/** Create or update one of the family's own recipes. `d` comes from the recipe editor. */
+export function saveCustomRecipe(d, id) {
+  const r = {
+    id: id || 'c-' + uid(), source: 'custom', sourceName: 'Our recipe', name: d.name, emoji: d.emoji || '🍽️', cuisine: d.cuisine || 'Other',
+    mealTypes: d.mealTypes.length ? d.mealTypes : ['dinner'], userTags: d.tags || [], tags: [], servings: Math.max(1, Number(d.servings) || 4),
+    prepMin: Math.max(0, Number(d.prepMin) || 0), cookMin: Math.max(0, Number(d.cookMin) || 0), leftovers: !!d.leftovers,
+    ingredients: d.ingredients.map((line) => parseIngredient(line)), steps: d.steps,
+  };
+  state.recipes[r.id] = r;
+  return prep(r);
+}
+/** Remove a recipe everywhere it is used. */
+export function deleteRecipe(id) {
+  delete state.recipes[id];
+  cache.delete(id);
+  state.favorites = state.favorites.filter((x) => x !== id);
+  state.plan = state.plan.filter((e) => e.recipeId !== id);
+  state.ratings = state.ratings.filter((x) => x.recipeId !== id);
 }
 /** Keep a web recipe on this device (needed once it is a favourite, planned, cooked or rated). */
 export function keepRecipe(r) {
-  if (r.source !== 'starter' && !state.recipes[r.id]) state.recipes[r.id] = r;
+  if (!state.recipes[r.id]) state.recipes[r.id] = r;
 }
 export const isFavorite = (id) => state.favorites.includes(id);
 export function avgRating(id) {

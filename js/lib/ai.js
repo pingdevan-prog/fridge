@@ -92,6 +92,25 @@ export async function aiParseReceipt(dataUrl) {
   return items;
 }
 
+const FOOD_PHOTO_SYSTEM = `You look at a photo of food in someone's kitchen (one item, or several on a counter, shelf or in a fridge) for a family kitchen inventory app.
+List every distinct food or drink you can clearly see. For each one give:
+- name: a short clear name ("Bananas", "2% Milk", "Shredded Cheddar"). brand: only if you can read it on the packaging, otherwise "".
+- qty and unit: count for loose produce (unit "each"), the package size if you can read it (16 oz, 1 gallon), otherwise 1 with a unit such as package, bag, jar, bottle, can, box, carton, loaf, bunch, head, dozen.
+- category: produce, dairy, meat, seafood, bakery, deli, pantry, canned, frozen, spices, snacks, beverages or other.
+- confidence 0 to 1. Use below 0.7 when you are guessing.
+Ignore anything that is not food. Never invent items you cannot see.
+Reply with ONLY a JSON array: [{"name":"","brand":"","qty":1,"unit":"each","category":"produce","confidence":0.9}]`;
+
+/** Identify the foods in a photo with Claude vision. */
+export async function aiIdentifyFoods(dataUrl) {
+  const [, mediaType, data] = dataUrl.match(/^data:(image\/[a-z+]+);base64,(.*)$/) || [];
+  if (!data) throw new Error('That image could not be read. Try a different photo.');
+  const text = await ask({ system: FOOD_PHOTO_SYSTEM, effort: 'low',
+    content: [{ type: 'image', source: { type: 'base64', media_type: mediaType, data } }, { type: 'text', text: 'What food is in this photo?' }] });
+  const items = extractJSON(text);
+  return Array.isArray(items) ? items : [];
+}
+
 /** Search the wider web for real recipes. Returns raw recipe objects (see lib/recipes.js fromAI). */
 export async function aiFindRecipes({ query, cuisine, mealType, foodType, maxCal, have, avoid }) {
   const want = [query && `matching "${query}"`, cuisine && `${cuisine} cuisine`, mealType && `for ${mealType}`, foodType && `that are ${foodType}`,

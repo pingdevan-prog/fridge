@@ -6,7 +6,7 @@
 //   fridge[]             FridgeItem     { id, name, brand, foodKey?, qty, unit, category, location, addedAt, expiresAt,
 //                                         nutrition?, price?, staple?, leftover?, sample? }
 //   householdItems[]     non-food things from receipts { id, name, qty, price, addedAt }
-//   recipes{}            Recipe         { id, name, source, sourceName, sourceUrl, image, emoji, cuisine, mealTypes[], tags[],
+//   recipes{}            Recipe         { id, name, source (custom|web), sourceName, sourceUrl, image, emoji, cuisine, mealTypes[], tags[],
 //                                         servings, prepMin, cookMin, timeEstimated?, ingredients[{name, qty, unit, raw, foodKey}], steps[] }
 //   favorites[]          recipe ids
 //   plan[]               MealPlanEntry  { id, date, slot, recipeId, servings, locked, leftoverOf?, sample? }
@@ -44,7 +44,7 @@ const defaults = () => ({
   fridge: [], householdItems: [], recipes: {}, favorites: [], plan: [], shopping: [], logs: [], ratings: [],
   brandChecks: {}, prices: {},
   settings: { model: 'claude-opus-5-5', usdaKey: '' },
-  sample: false, seeded: false,
+  _u: {}, _d: {}, // family sync bookkeeping: last-changed and deleted timestamps per record (see lib/sync.js)
 });
 
 export function load() {
@@ -56,11 +56,16 @@ export function load() {
   state.settings = { ...d.settings, ...(saved.settings || {}) };
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 }
-export function save() {
+// Family sync plugs in here: beforeSave stamps what changed, afterSave schedules an upload.
+export const hooks = { beforeSave: null, afterSave: null };
+/** Write to this device only (no sync bookkeeping). */
+export function saveQuiet() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); return true; } catch (e) { console.warn('Could not save', e); return false; }
 }
+export function save() { hooks.beforeSave?.(); const ok = saveQuiet(); hooks.afterSave?.(); return ok; }
+export const notify = () => listeners.forEach((fn) => fn());
 /** Save and tell the UI to redraw. */
-export function commit() { save(); listeners.forEach((fn) => fn()); }
+export function commit() { save(); notify(); }
 export const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
 
 /** Snapshot / restore power Undo for destructive actions. */
@@ -72,7 +77,7 @@ export function restore(snap) {
 }
 export function resetAll() {
   for (const k of Object.keys(state)) delete state[k];
-  Object.assign(state, defaults(), { seeded: true });
+  Object.assign(state, defaults());
 }
 export function replaceAll(data) {
   for (const k of Object.keys(state)) delete state[k];
@@ -96,7 +101,7 @@ export function estimateExpiry(food, category, location, from = today()) {
  * grows instead of creating a duplicate. Returns the fridge item.
  */
 export function addToFridge(f) {
-  const food = f.foodKey ? FOOD[f.foodKey] : findFood(f.name);
+  const food = f.foodKey === false ? null : f.foodKey ? FOOD[f.foodKey] : findFood(f.name); // false = never match to a basic ingredient
   const category = f.category || food?.cat || 'other';
   const location = f.location || food?.loc || CAT_DEFAULTS[category]?.[0] || 'pantry';
   const addedAt = f.addedAt || today();
