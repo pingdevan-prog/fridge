@@ -1,4 +1,5 @@
 // Plan tab: 7 days of breakfast, lunch and dinner. Swap, lock, drag and drop, regenerate.
+import { ic } from './icons.js';
 import { state, commit, today, addDays } from '../store.js';
 import { weekStart, weekDates, entryAt, generateWeek, dayTotals, alternatives, setEntry, removeEntry, moveEntry, dayName, SLOTS, targetKcal, planPool } from '../lib/planner.js';
 import { getRecipe } from '../lib/recipes.js';
@@ -13,11 +14,11 @@ function mealHtml(e) {
   const src = e.leftoverOf && state.plan.find((x) => x.id === e.leftoverOf);
   const detail = e.cooked ? 'Cooked' : src ? `Leftovers from ${dayName(src.date)}` : `${timeText(r)}${e.servings !== state.household.size ? ` · makes ${e.servings}` : ''}`;
   return `<div class="meal ${e.cooked ? 'cooked' : ''}">
-    <span class="mini handle" data-drag="${e.id}" role="button" aria-label="Drag ${esc(r.name)} to another day">⠿</span>
+    <span class="mini handle" data-drag="${e.id}" role="button" aria-label="Drag ${esc(r.name)} to another day">${ic('grip')}</span>
     <button class="open" data-act="plan-open" data-id="${e.id}">${thumb(r, 'sm')}
       <span><span class="nm">${esc(r.name)}</span><span class="muted small">${esc(detail)} · ${r.nutrition.kcal || '?'} kcal</span></span></button>
-    <button class="mini ${e.locked ? 'on' : ''}" data-act="plan-lock" data-id="${e.id}" aria-label="${e.locked ? 'Unlock' : 'Lock'} ${esc(r.name)}" aria-pressed="${!!e.locked}">${e.locked ? '🔒' : '🔓'}</button>
-    <button class="mini" data-act="plan-swap" data-date="${e.date}" data-slot="${e.slot}" aria-label="Swap ${esc(r.name)}">🔁</button>
+    <button class="mini ${e.locked ? 'on' : ''}" data-act="plan-lock" data-id="${e.id}" aria-label="${e.locked ? 'Unlock' : 'Lock'} ${esc(r.name)}" aria-pressed="${!!e.locked}">${ic(e.locked ? 'lock' : 'unlock')}</button>
+    <button class="mini" data-act="plan-swap" data-date="${e.date}" data-slot="${e.slot}" aria-label="Swap ${esc(r.name)}">${ic('swap')}</button>
   </div>`;
 }
 
@@ -28,18 +29,18 @@ function render() {
     <div class="rowf"><button class="icon-btn" data-act="plan-week" data-d="-7" aria-label="Previous week">‹</button><button class="icon-btn" data-act="plan-week" data-d="7" aria-label="Next week">›</button></div></div>`;
   const pool = planPool().length;
   if (!entries.length) {
-    return `${head}<div class="card empty"><div class="big">🗓️</div><h2>No meals planned yet</h2>
+    return `${head}<div class="card empty"><div class="big">${ic('calendar')}</div><h2>No meals planned yet</h2>
       ${pool ? `<p class="muted">Build a week of breakfast, lunch and dinner from your ${pool} ${pool === 1 ? 'recipe' : 'recipes'}, what your family likes and what is in your fridge.</p>
-        <button class="btn dark block" data-act="plan-generate">Build my week</button>`
+        <button class="btn block" data-act="plan-generate">Build my week</button>`
       : `<p class="muted">The plan is built from your own recipes. Add a few first, then come back and build your week.</p>
-        <button class="btn dark block" data-act="recipe-new">＋ Add a recipe</button>`}</div>`;
+        <button class="btn block" data-act="recipe-new">${ic('plus')}Add a recipe</button>`}</div>`;
   }
   return `${head}
     <div class="stack tight">
-      <button class="btn dark block" data-act="plan-generate">Rebuild unlocked meals</button>
+      <button class="btn block" data-act="plan-generate">Rebuild unlocked meals</button>
       <label class="check small"><input type="checkbox" data-change="plan-repeats" ${state.household.allowRepeats ? 'checked' : ''}> Allow the same dish more than once a week</label>
       ${pool < 21 ? `<p class="note">You have ${pool} ${pool === 1 ? 'recipe' : 'recipes'}. A week has 21 meals, so some dishes repeat or some slots stay empty until you add more.</p>` : ''}
-      <p class="muted small">Lock 🔒 the meals you like, swap 🔁 any meal, or drag ⠿ a meal to another day. Calories are per person for planned meals, snacks not included. Your family's average target is about ${num(target)} a day.</p>
+      <p class="muted small">Lock the meals you like, swap any meal, or drag a meal by its handle to another day. Calories are per person for planned meals, snacks not included. Your family's average target is about ${num(target)} a day.</p>
     </div>
     <div class="stack" style="margin-top:14px">${dates.map((d) => {
       const t = dayTotals(d);
@@ -48,7 +49,7 @@ function render() {
           <span class="small" style="text-align:right"><b>${num(t.kcal)} kcal</b> per person<br><span class="muted">${num(t.kcal * size)} for all ${size}</span></span></div>
         <div class="kbar" style="margin-bottom:8px"><i style="width:${Math.min(100, (t.kcal / target) * 100)}%"></i></div>
         ${SLOTS.map((s) => { const e = entryAt(d, s); return `<div class="slot" data-date="${d}" data-slot="${s}"><span class="slot-name">${cap(s)}</span>
-          ${e ? mealHtml(e) : `<button class="addmeal" data-act="plan-swap" data-date="${d}" data-slot="${s}">＋ Add ${s}</button>`}</div>`; }).join('')}
+          ${e ? mealHtml(e) : `<button class="addmeal" data-act="plan-swap" data-date="${d}" data-slot="${s}">${ic('plus')}Add ${s}</button>`}</div>`; }).join('')}
       </section>`;
     }).join('')}</div>`;
 }

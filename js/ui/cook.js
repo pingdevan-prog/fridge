@@ -5,6 +5,8 @@ import { scaleAmount, fmtAmount, convert, UNITS } from '../lib/units.js';
 import { fridgeStatus } from '../lib/match.js';
 import { recipeNutrition } from '../lib/nutrition.js';
 import { keepRecipe, rateRecipe } from '../lib/recipes.js';
+import { ic, avatar } from './icons.js';
+import { rateControls } from './meals.js';
 import { $, esc, on, openSheet, sheetOf, toast, withUndo, fields, options } from './dom.js';
 
 let c = null;      // the current cooking session
@@ -48,7 +50,7 @@ function durations(text) {
 const clock = (s) => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, '0')}`;
 const timersHtml = () => c.timers.map((t) => {
   const left = Math.ceil((t.end - Date.now()) / 1000);
-  return `<button class="timer ${left <= 0 ? 'done' : ''}" data-act="cook-timer-x" data-id="${t.id}" aria-label="Timer, tap to remove">⏱ ${left <= 0 ? 'Time is up! Tap to clear' : clock(left) + ' · ' + esc(t.label)}</button>`;
+  return `<button class="timer ${left <= 0 ? 'done' : ''}" data-act="cook-timer-x" data-id="${t.id}" aria-label="Timer, tap to remove">${ic('clock')}${left <= 0 ? 'Time is up! Tap to clear' : clock(left) + ' · ' + esc(t.label)}</button>`;
 }).join('');
 
 function beep() {
@@ -69,9 +71,9 @@ function draw() {
   const o = $('#overlay');
   if (c.phase === 'prep') {
     o.innerHTML = `<div class="cook">
-      <div class="rowf"><button class="icon-btn" data-act="cook-exit" aria-label="Close cooking mode">✕</button><div class="grow"><p class="muted small">Getting ready</p><h2>${esc(c.r.name)}</h2></div></div>
+      <div class="rowf"><button class="icon-btn" data-act="cook-exit" aria-label="Close cooking mode">${ic('x')}</button><div class="grow"><p class="muted small">Getting ready</p><h2>${esc(c.r.name)}</h2></div></div>
       <div class="card rowf"><div class="grow"><h3>How many servings?</h3><p class="muted small">The recipe makes ${c.r.servings}. Every amount adjusts.</p></div>
-        <div class="stepper"><button data-act="cook-serv" data-d="-1" aria-label="Fewer servings">−</button><b>${c.servings}</b><button data-act="cook-serv" data-d="1" aria-label="More servings">＋</button></div></div>
+        <div class="stepper"><button data-act="cook-serv" data-d="-1" aria-label="Fewer servings">${ic('minus')}</button><b>${c.servings}</b><button data-act="cook-serv" data-d="1" aria-label="More servings">${ic('plus')}</button></div></div>
       <div class="card"><h3>Ingredients for ${c.servings}</h3><p class="muted small">Tap an amount to change it, for example if you use less oil.</p><div style="margin-top:6px">${ingRows()}</div></div>
       <p class="muted small center">${'wakeLock' in navigator ? 'Your screen stays on while you cook.' : 'Tip: this browser cannot keep the screen on, so set Auto-Lock to Never while you cook.'}</p>
       <div class="cook-bar"><button class="btn" data-act="cook-begin">Start cooking</button></div></div>`;
@@ -79,13 +81,13 @@ function draw() {
   }
   const n = c.r.steps.length, text = c.r.steps[c.step] || '', last = c.step >= n - 1;
   o.innerHTML = `<div class="cook">
-    <div class="rowf"><button class="icon-btn" data-act="cook-exit" aria-label="Close cooking mode">✕</button>
+    <div class="rowf"><button class="icon-btn" data-act="cook-exit" aria-label="Close cooking mode">${ic('x')}</button>
       <div class="grow"><p class="muted small">${esc(c.r.name)}</p><h3>Step ${c.step + 1} of ${n}</h3></div>
       <button class="btn sm" data-act="cook-ings">Ingredients</button></div>
     <div class="dots">${c.r.steps.map((_, i) => `<i class="${i <= c.step ? 'on' : ''}"></i>`).join('')}</div>
     <div class="rowf wrap" id="cook-timers">${timersHtml()}</div>
     <p class="step-text">${esc(text)}</p>
-    <div class="rowf wrap">${durations(text).map((d) => `<button class="btn sm ghost" style="box-shadow:inset 0 0 0 2px var(--butter);color:var(--butter)" data-act="cook-timer" data-secs="${d.secs}" data-label="${d.label}">⏱ Start ${d.label} timer</button>`).join('')}</div>
+    <div class="rowf wrap">${durations(text).map((d) => `<button class="btn sm ghost" data-act="cook-timer" data-secs="${d.secs}" data-label="${d.label}">${ic('clock')}Start ${d.label} timer</button>`).join('')}</div>
     <div class="cook-bar"><button class="btn ghost" data-act="cook-prev" ${c.step === 0 ? 'disabled' : ''}>Back</button>
       ${last ? '<button class="btn" data-act="cook-done">Done cooking</button>' : '<button class="btn" data-act="cook-next">Next step</button>'}</div></div>`;
   $('#overlay').scrollTop = 0;
@@ -104,7 +106,7 @@ on('cook-amt', (el) => {
   const sheet = openSheet(() => `<h2>${esc(ing.name)}</h2><p class="sub">How much are you really using?</p>
     <div class="grid2" style="margin-top:12px"><label class="field"><span>Amount</span><input class="input" name="qty" type="number" inputmode="decimal" min="0" step="any" value="${ing.qty}"></label>
       <label class="field"><span>Unit</span><select class="input" name="unit">${options(UNITS, ing.unit || 'each')}</select></label></div>
-    <button class="btn dark block" style="margin-top:12px" data-act="cook-amt-save">Save</button>`);
+    <button class="btn block" style="margin-top:12px" data-act="cook-amt-save">Save</button>`);
   sheet.ctx = { ing, parent };
 });
 on('cook-amt-save', (el) => {
@@ -151,12 +153,12 @@ on('cook-done', () => {
             <input class="input" style="width:86px" type="number" inputmode="decimal" min="0" step="any" value="${r.qty}" data-change="done-qty" data-i="${i}" aria-label="Amount of ${esc(r.item.name)} used"><span style="width:64px" class="small">${esc(r.item.unit)}</span></div>`
         : `<div class="ing"><span class="grow">${esc(r.ing.name)}</span><span class="badge plain">not in your fridge</span></div>`)).join('') || '<p class="muted">Nothing to take out.</p>'}</div></div>
     <div class="sec"><h3>Who is eating?</h3><p class="muted small">Pick how many servings each person has.</p>
-      <div class="stack tight" style="margin-top:6px">${state.members.map((m) => `<div class="rowf"><span class="grow nm">${m.emoji} ${esc(m.name)}</span>
+      <div class="stack tight" style="margin-top:6px">${state.members.map((m) => `<div class="rowf"><span class="grow nm rowf">${avatar(m)}${esc(m.name)}</span>
         <select class="input" style="width:150px" data-change="done-eat" data-id="${m.id}" aria-label="Servings for ${esc(m.name)}">${options([['0', 'Not eating'], ['0.5', 'Half serving'], ['0.75', '3/4 serving'], ['1', '1 serving'], ['1.5', '1 1/2 servings'], ['2', '2 servings']], String(eaters[m.id]))}</select></div>`).join('')}</div></div>
     <div class="sec stack tight" data-form="done"><label class="field"><span>Which meal is this?</span><select class="input" name="slot" data-change="done-slot">${options(['breakfast', 'lunch', 'dinner', 'snack'], curSlot)}</select></label>
       <label class="field"><span>Leftover servings to save in the fridge</span><input class="input" name="leftovers" type="number" inputmode="decimal" min="0" step="any" value="${left}"></label>
       <p class="muted small">Leftovers go in the fridge as their own item with a use-by date about 4 days out.</p></div>
-    <div class="sticky-bar"><button class="btn dark grow" data-act="done-save">Save meal</button></div>`;
+    <div class="sticky-bar"><button class="btn grow" data-act="done-save">Save meal</button></div>`;
   }, { full: true });
   sheet.ctx = { rows, eaters, setSlot(v) { curSlot = v; } };
 });
@@ -194,12 +196,9 @@ function askRating(r) {
   const sheet = openSheet(() => `<h2>How was it?</h2><p class="sub">${esc(r.name)}. Ratings shape future suggestions.</p>
     <div class="stack" style="margin-top:12px">${state.members.map((m) => {
       const mine = state.ratings.find((x) => x.recipeId === r.id && x.memberId === m.id)?.stars || 0;
-      return `<div><div class="nm">${m.emoji} ${esc(m.name)}</div><div class="rowf">
-        <button class="icon-btn" data-act="ask-rate" data-id="${m.id}" data-n="1" aria-label="Thumbs down">👎</button>
-        <span class="stars">${[1, 2, 3, 4, 5].map((n) => `<button class="${n <= mine ? 'on' : ''}" data-act="ask-rate" data-id="${m.id}" data-n="${n}" aria-label="${n} stars">⭐</button>`).join('')}</span>
-        <button class="icon-btn" data-act="ask-rate" data-id="${m.id}" data-n="5" aria-label="Thumbs up">👍</button></div></div>`;
+      return `<div><div class="nm rowf">${avatar(m)}${esc(m.name)}</div>${rateControls('ask-rate', mine, `data-id="${m.id}"`)}</div>`;
     }).join('')}
-    <button class="btn dark block" data-act="sheet-close">Done</button></div>`);
+    <button class="btn block" data-act="sheet-close">Done</button></div>`);
   sheet.ctx = { r };
 }
 on('ask-rate', (el) => { const sh = sheetOf(el); rateRecipe(sh.ctx.r, el.dataset.id, Number(el.dataset.n)); sh.refresh(); });

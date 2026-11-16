@@ -1,4 +1,5 @@
 // Tiny UI toolkit: event delegation, tab views, bottom sheets, toasts with Undo.
+import { ic } from './icons.js';
 import { snapshot, restore, commit, subscribe, parseYmd, today, daysBetween } from '../store.js';
 
 export const $ = (s, r = document) => r.querySelector(s);
@@ -44,7 +45,7 @@ export function openSheet(draw, opts = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'sheet-wrap' + (opts.full ? ' full' : '');
   wrap.innerHTML = `<div class="sheet-backdrop" data-act="sheet-close"></div>
-    <section class="sheet" role="dialog" aria-modal="true"><button class="sheet-x" data-act="sheet-close" aria-label="Close">✕</button><div class="sheet-body"></div></section>`;
+    <section class="sheet" role="dialog" aria-modal="true"><button class="sheet-x" data-act="sheet-close" aria-label="Close">${ic('x')}</button><div class="sheet-body"></div></section>`;
   const body = $('.sheet-body', wrap), scroller = $('.sheet', wrap);
   const api = {
     el: wrap, body,

@@ -2,11 +2,11 @@
 //
 // Data model (all stored in one JSON document):
 //   household            { size, allergies[], neverEat[], likes[], dislikes[], cuisines[], weeknightMinutes, brandPref, allowRepeats }
-//   members[]            FamilyMember   { id, name, ageGroup: adult|teen|child, calorieGoal?, emoji }
+//   members[]            FamilyMember   { id, name, ageGroup: adult|teen|child, calorieGoal? }
 //   fridge[]             FridgeItem     { id, name, brand, foodKey?, qty, unit, category, location, addedAt, expiresAt,
 //                                         nutrition?, price?, staple?, leftover?, sample? }
 //   householdItems[]     non-food things from receipts { id, name, qty, price, addedAt }
-//   recipes{}            Recipe         { id, name, source (custom|web), sourceName, sourceUrl, image, emoji, cuisine, mealTypes[], tags[],
+//   recipes{}            Recipe         { id, name, source: 'custom', sourceName, image?, cuisine, mealTypes[], tags[],
 //                                         servings, prepMin, cookMin, timeEstimated?, ingredients[{name, qty, unit, raw, foodKey}], steps[] }
 //   favorites[]          recipe ids
 //   plan[]               MealPlanEntry  { id, date, slot, recipeId, servings, locked, leftoverOf?, sample? }
@@ -36,10 +36,10 @@ const defaults = () => ({
   household: { size: 4, allergies: [], neverEat: [], likes: [], dislikes: [], cuisines: ['Indian', 'Mexican', 'Italian', 'American'],
     weeknightMinutes: 45, brandPref: 'balanced', allowRepeats: false },
   members: [
-    { id: 'm1', name: 'Mom', ageGroup: 'adult', emoji: '👩' },
-    { id: 'm2', name: 'Dad', ageGroup: 'adult', emoji: '👨' },
-    { id: 'm3', name: 'Teen', ageGroup: 'teen', emoji: '🧑' },
-    { id: 'm4', name: 'Kid', ageGroup: 'child', emoji: '🧒' },
+    { id: 'm1', name: 'Mom', ageGroup: 'adult' },
+    { id: 'm2', name: 'Dad', ageGroup: 'adult' },
+    { id: 'm3', name: 'Teen', ageGroup: 'teen' },
+    { id: 'm4', name: 'Kid', ageGroup: 'child' },
   ],
   fridge: [], householdItems: [], recipes: {}, favorites: [], plan: [], shopping: [], logs: [], ratings: [],
   brandChecks: {}, prices: {},

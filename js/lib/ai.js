@@ -111,27 +111,6 @@ export async function aiIdentifyFoods(dataUrl) {
   return Array.isArray(items) ? items : [];
 }
 
-/** Search the wider web for real recipes. Returns raw recipe objects (see lib/recipes.js fromAI). */
-export async function aiFindRecipes({ query, cuisine, mealType, foodType, maxCal, have, avoid }) {
-  const want = [query && `matching "${query}"`, cuisine && `${cuisine} cuisine`, mealType && `for ${mealType}`, foodType && `that are ${foodType}`,
-    maxCal && `at most ${maxCal} calories per serving`].filter(Boolean).join(', ');
-  const text = await ask({
-    effort: 'medium',
-    tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 6 }],
-    system: `You find real recipes on reputable recipe websites for a family of four in Austin, Texas.
-Search the web, then reply with ONLY a JSON array of up to 6 recipes that really exist at the URLs you give:
-[{"name":"","sourceName":"site name","sourceUrl":"https://...","cuisine":"","mealTypes":["dinner"],"servings":4,"prepMin":10,"cookMin":20,
-"ingredients":["1 lb chicken breast","2 tbsp olive oil"],"steps":["short step in your own words"],"caloriesPerServing":null}]
-Write the steps briefly in your own words (do not copy text from the site). Set caloriesPerServing only if the page states it, otherwise null.
-Never invent a recipe, a site or a URL.`,
-    content: `Find recipes ${want || 'the family would enjoy for dinner'}.
-Foods we already have (prefer recipes that use them): ${have.join(', ') || 'unknown'}.
-Never include: ${avoid.join(', ') || 'no restrictions'}.`,
-  });
-  const list = extractJSON(text);
-  return Array.isArray(list) ? list : [];
-}
-
 /** Ask Claude to check on heb.com whether suggested products are really sold there. */
 export async function aiVerifyBrands(list) {
   const text = await ask({

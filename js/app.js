@@ -10,6 +10,7 @@ import { openShared } from './ui/shop.js';
 import './ui/me.js';
 import './ui/cook.js';
 import './ui/capture.js';
+import './ui/suggest.js';
 
 load();
 removeOldDefaults();
@@ -19,15 +20,22 @@ render();
 /** Earlier versions shipped sample groceries and starter recipes. Clear out anything left over from them. */
 function removeOldDefaults() {
   const starter = (id) => String(id || '').startsWith('s-');
-  const before = JSON.stringify([state.fridge.length, state.plan.length, state.logs.length, state.ratings.length, state.favorites.length, state.householdItems.length]);
+  const before = JSON.stringify([Object.keys(state.recipes).length, state.fridge.length, state.plan.length, state.logs.length, state.ratings.length, state.favorites.length, state.householdItems.length]);
   for (const k of ['fridge', 'householdItems', 'plan', 'logs', 'ratings']) state[k] = state[k].filter((x) => !x.sample);
   state.plan = state.plan.filter((e) => !starter(e.recipeId));
   state.ratings = state.ratings.filter((r) => !starter(r.recipeId));
   state.favorites = state.favorites.filter((id) => !starter(id));
   for (const k of Object.keys(state.prices)) if (state.prices[k].sample) delete state.prices[k];
-  for (const id of Object.keys(state.recipes)) if (starter(id)) delete state.recipes[id];
+  // Recipes found online are no longer part of the app: keep only the family's own.
+  const gone = new Set(Object.keys(state.recipes).filter((id) => starter(id) || state.recipes[id].source !== 'custom'));
+  for (const id of gone) delete state.recipes[id];
+  if (gone.size) {
+    state.plan = state.plan.filter((e) => !gone.has(e.recipeId));
+    state.ratings = state.ratings.filter((r) => !gone.has(r.recipeId));
+    state.favorites = state.favorites.filter((id) => !gone.has(id));
+  }
   delete state.sample; delete state.seeded;
-  const after = JSON.stringify([state.fridge.length, state.plan.length, state.logs.length, state.ratings.length, state.favorites.length, state.householdItems.length]);
+  const after = JSON.stringify([Object.keys(state.recipes).length, state.fridge.length, state.plan.length, state.logs.length, state.ratings.length, state.favorites.length, state.householdItems.length]);
   if (before !== after) { state.shopping = state.shopping.filter((s) => s.manual); save(); }
 }
 

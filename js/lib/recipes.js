@@ -1,4 +1,4 @@
-// Recipes: the family's own recipes, recipes saved from the web, live web search (TheMealDB), filtering and ranking.
+// Recipes: the family's own recipes, filtering and ranking.
 import { FOOD } from '../data/foods.js';
 import { parseIngredient, toGrams } from './units.js';
 import { findFood, fridgeStatus, tokens } from './match.js';
@@ -11,9 +11,8 @@ export const FOOD_TYPES = [['vegetarian', 'Vegetarian'], ['high-protein', 'High 
   ['quick', 'Quick (under 30 min)'], ['one-pot', 'One pot'], ['kid-friendly', 'Kid friendly']];
 const CUISINE_GROUPS = { Mediterranean: ['Mediterranean', 'Greek', 'Turkish', 'Moroccan', 'Egyptian', 'Tunisian', 'Spanish'], 'Tex-Mex': ['Tex-Mex', 'Mexican'], Mexican: ['Mexican', 'Tex-Mex'] };
 const MEAT_WORDS = /\b(chicken|beef|pork|bacon|ham|sausage|turkey|lamb|mutton|goat|veal|duck|fish|salmon|tuna|cod|shrimp|prawn|anchov|crab|lobster|mussel|clam|oyster|squid|chorizo|pepperoni|prosciutto|gelatin|steak|mince|meat)/i;
-const SPICY = new Set(['jalapeño', 'chili powder', 'red pepper flakes', 'curry powder']);
 
-const cache = new Map(); // id -> prepared recipe (saved recipes and this session's web results)
+const cache = new Map(); // id -> prepared recipe
 
 /** Parse ingredient lines, attach foods, compute nutrition, health and automatic tags. Safe to call twice. */
 export function prep(r) {
@@ -55,9 +54,9 @@ export function getRecipe(id) {
 export function localRecipes() {
   return Object.keys(state.recipes || {}).map(getRecipe);
 }
-/** "My recipes": the ones the family wrote, plus web recipes saved as favorites. The weekly plan is built from these. */
+/** "My recipes": the ones the family wrote. The weekly plan is built from these. */
 export function myRecipes() {
-  return localRecipes().filter((r) => r.source === 'custom' || state.favorites.includes(r.id));
+  return localRecipes().filter((r) => r.source === 'custom');
 }
 /** Create or update one of the family's own recipes. `d` comes from the recipe editor. */
 export function saveCustomRecipe(d, id) {
@@ -186,121 +185,4 @@ export function matchesFilters(r, f) {
     if (!r.name.toLowerCase().includes(q) && !r.ingredients.some((i) => i.name.toLowerCase().includes(q))) return false;
   }
   return true;
-}
-
-// ---------- Web search: TheMealDB (free, real recipes with photos and source links) ----------
-const API = 'https://www.themealdb.com/api/json/v1/1/';
-const AREAS = { Indian: ['Indian'], Mexican: ['Mexican'], 'Tex-Mex': ['Mexican'], Italian: ['Italian'], Chinese: ['Chinese'],
-  Mediterranean: ['Greek', 'Turkish', 'Moroccan'], American: ['American'], Japanese: ['Japanese'], Thai: ['Thai'], French: ['French'] };
-const lookups = new Map();
-
-async function api(path) {
-  const res = await fetch(API + path);
-  if (!res.ok) throw new Error('The recipe site did not respond.');
-  return (await res.json()).meals || [];
-}
-async function lookup(id) {
-  if (!lookups.has(id)) lookups.set(id, api('lookup.php?i=' + id).then((m) => m[0] || null).catch(() => null));
-  return lookups.get(id);
-}
-const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-
-function splitSteps(text) {
-  let parts = String(text || '').split(/\r?\n+/).map((s) => s.trim()).filter((s) => s && !/^step\s*\d+:?$/i.test(s))
-    .map((s) => s.replace(/^(step\s*)?\d+\s*[.):-]\s*/i, ''));
-  if (parts.length < 3) {
-    const sentences = String(text || '').replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+/g) || [String(text || '')];
-    parts = [];
-    for (let i = 0; i < sentences.length; i += 2) parts.push(sentences.slice(i, i + 2).join(' ').trim());
-  }
-  return parts.filter(Boolean);
-}
-/** Rough cooking time from the durations mentioned in the instructions. */
-function estimateMinutes(text) {
-  let total = 0;
-  for (const m of String(text).matchAll(/(\d+)(?:\s*(?:-|to)\s*(\d+))?\s*(hours?|hrs?|minutes?|mins?)/gi)) {
-    const n = m[2] ? (Number(m[1]) + Number(m[2])) / 2 : Number(m[1]);
-    total += /^h/i.test(m[3]) ? n * 60 : n;
-  }
-  return Math.round(clamp(total || 30, 10, 240) / 5) * 5;
-}
-
-/** Convert a TheMealDB meal into our Recipe shape. */
-function fromMealDB(m) {
-  const id = 'w-' + m.idMeal;
-  if (cache.has(id)) return cache.get(id);
-  const ingredients = [];
-  for (let i = 1; i <= 20; i++) {
-    const name = (m['strIngredient' + i] || '').trim(), measure = (m['strMeasure' + i] || '').trim();
-    if (!name) continue;
-    const p = parseIngredient(measure.replace(/(\d)\s*(kg|g|ml|l|oz|lbs?|tbsp|tbs|tblsp|tsp|cups?)\b/gi, '$1 $2') + ' x');
-    ingredients.push({ qty: p.qty, unit: p.qty ? p.unit : '', name, raw: `${measure} ${name}`.trim() });
-  }
-  const cat = m.strCategory || '', text = m.strInstructions || '';
-  const mealTypes = cat === 'Breakfast' ? ['breakfast'] : cat === 'Dessert' ? ['snack'] : cat === 'Starter' || cat === 'Side' ? ['lunch', 'snack'] : ['lunch', 'dinner'];
-  const tags = [];
-  if (/pie|casserole|stew|mac|lasagn|bake|curry|soup|chili|roast/i.test(m.strMeal)) tags.push('comfort');
-  if (/one[- ]pot|slow cooker|casserole|stew|soup|skillet|traybake|sheet pan|one pan/i.test(m.strMeal + ' ' + text)) tags.push('one-pot');
-  let host = 'TheMealDB';
-  try { if (m.strSource) host = new URL(m.strSource).hostname.replace(/^www\./, ''); } catch { /* keep default */ }
-  const cook = estimateMinutes(text), prepMin = Math.min(30, 5 + Math.round(ingredients.length * 1.5 / 5) * 5);
-  const r = prep({
-    id, name: m.strMeal, source: 'web', sourceName: host, sourceUrl: m.strSource || `https://www.themealdb.com/meal/${m.idMeal}`,
-    image: m.strMealThumb || '', emoji: '🍽️', cuisine: m.strArea || 'Other', mealTypes, tags, servings: 4, servingsEstimated: true,
-    prepMin, cookMin: cook, timeEstimated: true, ingredients, steps: splitSteps(text), video: m.strYoutube || '',
-  });
-  if (['Pasta', 'Chicken'].includes(cat) && !r.ingredients.some((i) => SPICY.has(i.foodKey))) r.tags.push('kid-friendly');
-  return r;
-}
-
-/** Convert a recipe found by Claude web search into our Recipe shape. */
-export function fromAI(o) {
-  let h = 0;
-  for (const ch of String(o.sourceUrl || o.name)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  let host = o.sourceName || '';
-  try { if (!host && o.sourceUrl) host = new URL(o.sourceUrl).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
-  const r = prep({
-    id: 'a-' + h.toString(36), name: o.name, source: 'web', sourceName: host || 'Web', sourceUrl: o.sourceUrl || '', image: '', emoji: '🍽️',
-    cuisine: o.cuisine || 'Other', mealTypes: Array.isArray(o.mealTypes) && o.mealTypes.length ? o.mealTypes : ['dinner'], tags: [],
-    servings: Number(o.servings) || 4, prepMin: Number(o.prepMin) || 10, cookMin: Number(o.cookMin) || 20,
-    ingredients: (o.ingredients || []).map(String), steps: (o.steps || []).map(String),
-  });
-  if (Number(o.caloriesPerServing) > 0) r.statedKcal = Math.round(Number(o.caloriesPerServing));
-  return r;
-}
-
-/** Foods worth searching by: expiring first, then proteins and vegetables on hand. */
-function fridgeSearchTerms() {
-  const keys = [];
-  const push = (i) => { if (i.foodKey && !FOOD[i.foodKey].basic && !keys.includes(i.foodKey)) keys.push(i.foodKey); };
-  expiringSoon(4).forEach(push);
-  state.fridge.filter((i) => i.qty > 0 && ['meat', 'seafood', 'produce'].includes(i.category)).forEach(push);
-  return keys;
-}
-
-/** Search the internet (TheMealDB) for real recipes that fit the filters. */
-export async function searchWeb(f) {
-  let full;
-  if (f.q) full = await api('search.php?s=' + encodeURIComponent(f.q));
-  else {
-    const areas = f.cuisine && AREAS[f.cuisine] ? (await Promise.all(AREAS[f.cuisine].map((a) => api('filter.php?a=' + a)))).flat() : null;
-    let cats = null;
-    if (f.mealType === 'breakfast') cats = await api('filter.php?c=Breakfast');
-    else if (f.foodType === 'vegetarian') cats = (await Promise.all(['Vegetarian', 'Vegan'].map((c) => api('filter.php?c=' + c)))).flat();
-    let metas;
-    if (areas && cats) {
-      const ids = new Set(cats.map((m) => m.idMeal));
-      const both = areas.filter((m) => ids.has(m.idMeal));
-      metas = both.length ? both : (f.mealType === 'breakfast' ? cats : areas);
-    } else metas = areas || cats || [];
-    if (!metas.length) {
-      const lists = await Promise.all(fridgeSearchTerms().slice(0, 3).map((k) => api('filter.php?i=' + encodeURIComponent(k.replace(/ /g, '_'))).catch(() => [])));
-      metas = lists.flat();
-      if (!metas.length) metas = await api('filter.php?c=Chicken');
-    }
-    const seen = new Set();
-    metas = shuffle(metas.filter((m) => !seen.has(m.idMeal) && seen.add(m.idMeal))).slice(0, 18);
-    full = (await Promise.all(metas.map((m) => lookup(m.idMeal)))).filter(Boolean);
-  }
-  return full.map(fromMealDB);
 }

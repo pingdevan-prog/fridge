@@ -6,9 +6,9 @@ It is a single-page web app with no build step and no server. Open it on a phone
 
 ## What it does
 
-- **Add food four ways.** Take a photo of a food (a banana, a head of broccoli), scan a barcode, scan an H-E-B receipt, or type it in. Everything passes through a review screen before it goes into the fridge.
+- **Add food fast.** Take a photo of a drawer, shelf or counter and every food found is listed (several photos at once work too), scan an H-E-B receipt, or type it in with a suggestion dropdown covering a large list of ingredients. Everything passes through a review screen before it goes into the fridge.
 - **Fridge.** Fridge, Freezer, Pantry and Spices & Staples shelves, with estimated best-before dates and a "Use these soon" row. The app starts empty: it holds only what your family adds.
-- **Meals.** Write your family's own recipes in the recipe editor. You can also search the web and save a recipe to My recipes. Recipes are ranked by how many ingredients you already have, family preferences and ratings, food about to expire, and how healthy they are.
+- **Meals.** Write your family's own recipes. Ingredients are picked from a dropdown, with foods in your fridge first. Recipes are ranked by how many ingredients you already have, family preferences and ratings, food about to expire, and how healthy they are.
 - **Plan.** A 7-day plan of breakfast, lunch and dinner built only from My recipes. Lock, swap, drag and drop, and rebuild only the unlocked meals. Leftovers are planned for the next day's lunch.
 - **Shop.** What the plan needs minus what is in the fridge, grouped by H-E-B store section, with brand suggestions and an estimated total.
 - **Cooking mode.** Pick servings, amounts scale, big step-by-step text with timers, screen stays on. "Done cooking" subtracts what you used from the fridge and logs the calories.
@@ -21,10 +21,9 @@ It is a single-page web app with no build step and no server. Open it on a phone
 |---|---|
 | Nutrition | Built-in table of estimates based on USDA FoodData Central reference values, plus an optional live USDA lookup when editing an item |
 | Calorie ranges | Dietary Guidelines for Americans 2020-2025 |
-| Web recipes | TheMealDB, with a link to each recipe's original source |
-| Receipt reading | Claude vision when you add your own Anthropic API key; otherwise on-device OCR (Tesseract.js) plus an H-E-B abbreviation dictionary |
-| Food photos | Claude vision with an API key (can list several foods in one photo); otherwise an on-device image model (MobileNet) that knows common whole foods, one per photo |
-| Barcodes | Open Food Facts, a free open product database (name, size, nutrition) |
+| Receipt reading | Claude vision when you add your own Anthropic API key; otherwise on-device text reading (Tesseract.js) with contrast clean-up, a parser that tolerates common misreads, and an H-E-B abbreviation dictionary |
+| Food photos | Claude vision with an API key (also reads packaged foods); otherwise two image models that run on the phone: an object finder (COCO-SSD lite) that counts foods, and a classifier (MobileNet) run over the photo in overlapping squares. These know fresh fruit and vegetables best |
+| Ingredient suggestions | A built-in list of over a thousand cooking ingredients and grocery foods |
 | Prices | What you paid on scanned receipts when available, otherwise rough estimates. Never H-E-B's actual prices |
 | Brands | H-E-B store-brand lines, marked "unverified" until checked on heb.com |
 
@@ -48,9 +47,9 @@ Then open http://localhost:5178.
 index.html, css/styles.css     page shell and design
 js/app.js                      start-up
 js/store.js                    saved data and the data model
-js/data/                       food table, H-E-B knowledge
+js/data/                       food table, ingredient list, H-E-B knowledge
 js/lib/                        units, matching, nutrition, receipts, recipes, planner, shopping, sync, Claude
-js/ui/                         one file per tab, plus cooking mode and photo/barcode capture
+js/ui/                         one file per tab, cooking mode, food photos, suggestion dropdown, icons
 sw.js, manifest.webmanifest    install to home screen, offline app shell
 ```
 

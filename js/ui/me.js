@@ -4,6 +4,7 @@ import { AGE_GROUPS, GOAL_MIN, GOAL_MAX, GUIDELINE_SOURCE, SOURCE, zero, addInto
 import { CUISINES } from '../lib/recipes.js';
 import { getKey, setKey, hasAI, MODELS } from '../lib/ai.js';
 import { syncStatus, joinFamily, leaveFamily, syncNow, resetShadow } from '../lib/sync.js';
+import { ic, avatar } from './icons.js';
 import { $, esc, on, render as redraw, registerView, openSheet, sheetOf, toast, withUndo, fields, options, num, cap } from './dom.js';
 
 let who = null; // selected family member id
@@ -30,12 +31,12 @@ function dashboard(m) {
   const macros = [['Protein', tot.protein, kid ? 50 : 60], ['Carbs', tot.carbs, 275], ['Fat', tot.fat, 78], ['Fiber', tot.fiber, 28]];
   return `<div class="card">
       <div class="rowf"><div class="grow"><p class="muted small">Today</p><div class="bigno">${num(tot.kcal)}</div><p class="small">calories eaten${m.calorieGoal && !kid ? ` of ${num(m.calorieGoal)}` : ''}</p></div>
-        <button class="btn sm" data-act="log-new">＋ Log food</button></div>
+        <button class="btn sm" data-act="log-new">${ic('plus')}Log food</button></div>
       <div style="margin-top:12px">${rangeBar(tot.kcal, m.calorieGoal && !kid ? [m.calorieGoal * 0.9, m.calorieGoal * 1.1] : g.range, !kid && m.calorieGoal)}</div>
       ${kid ? `<p class="note" style="margin-top:10px">Growing bodies need plenty of fuel, so there is no calorie limit here. Aim for variety instead: vegetables or fruit, protein and whole grains at most meals.</p>` : ''}
       <div class="stack tight" style="margin-top:14px">${macros.map(([l, v, ref]) => `<div class="macro"><span>${l}</span><div class="kbar"><i style="width:${Math.min(100, (v / ref) * 100)}%"></i></div><b>${Math.round(v)} g</b></div>`).join('')}</div>
       ${meals.length ? `<hr><div class="stack tight">${meals.map((l) => `<div class="rowf small"><span class="grow"><b>${esc(l.name)}</b><br><span class="muted">${cap(l.slot)} · ${l.servings} ${l.servings === 1 ? 'serving' : 'servings'}</span></span><b>${l.kcal} kcal</b>
-        <button class="icon-btn clear" data-act="log-del" data-id="${l.id}" aria-label="Delete ${esc(l.name)}">✕</button></div>`).join('')}</div>` : '<p class="muted small" style="margin-top:12px">Nothing logged today. Meals you cook are logged automatically when you tap Done cooking.</p>'}
+        <button class="icon-btn clear" data-act="log-del" data-id="${l.id}" aria-label="Delete ${esc(l.name)}">${ic('trash')}</button></div>`).join('')}</div>` : '<p class="muted small" style="margin-top:12px">Nothing logged today. Meals you cook are logged automatically when you tap Done cooking.</p>'}
     </div>
     <div class="card sec"><div class="rowf"><h2 class="grow">Last 7 days</h2><span class="small muted">${avg ? `average ${num(avg)} a day` : 'no meals logged'}</span></div>
       <div class="week" style="margin-top:12px">${week.map((w, i) => `<div class="${i === 6 ? 'now' : ''}"><span>${w.kcal ? num(w.kcal) : ''}</span><i style="height:${Math.max(2, (w.kcal / peak) * 78)}px"></i><span>${DAY[parseYmd(days[i]).getDay()]}</span></div>`).join('')}</div>
@@ -49,27 +50,27 @@ function healthSummary() {
   const all = [...meals.values()], veg = all.filter((m) => m.veg).length, home = all.filter((m) => m.home).length;
   if (!all.length) return '<p class="muted">Cook or log a few meals and a weekly summary appears here.</p>';
   const tip = veg / all.length >= 0.6 ? 'Nice work. Keep the vegetables coming.' : 'Try adding a vegetable or fruit to one more meal each day.';
-  return `<div class="stack tight"><p>🥦 You had vegetables or fruit at <b>${veg} of ${all.length}</b> meals this week.</p>
-    <p>🍳 <b>${home} of ${all.length}</b> meals were cooked at home.</p><p class="muted small">${tip}</p></div>`;
+  return `<div class="stack tight"><p>You had vegetables or fruit at <b>${veg} of ${all.length}</b> meals this week.</p>
+    <p><b>${home} of ${all.length}</b> meals were cooked at home.</p><p class="muted small">${tip}</p></div>`;
 }
 
 function render() {
   if (!state.members.find((m) => m.id === who)) who = state.members[0]?.id || null;
   const m = state.members.find((x) => x.id === who), h = state.household;
   return `<div class="top"><div><h1>Me</h1><p class="sub">Calories, family and settings</p></div></div>
-    <div class="chips">${state.members.map((x) => `<button class="chip ${x.id === who ? 'on' : ''}" data-act="me-who" data-id="${x.id}">${x.emoji} ${esc(x.name)}</button>`).join('')}
-      <button class="chip" data-act="member-new">＋ Add person</button></div>
-    <div style="margin-top:10px">${m ? dashboard(m) : '<div class="card empty"><div class="big">👋</div><h2>Add your family</h2><p class="muted">Add each person to track meals and calories.</p><button class="btn dark" data-act="member-new">Add a person</button></div>'}</div>
+    <div class="chips">${state.members.map((x) => `<button class="chip ${x.id === who ? 'on' : ''}" data-act="me-who" data-id="${x.id}">${avatar(x)}${esc(x.name)}</button>`).join('')}
+      <button class="chip" data-act="member-new">${ic('plus')}Add person</button></div>
+    <div style="margin-top:10px">${m ? dashboard(m) : `<div class="card empty"><div class="big">${ic('users')}</div><h2>Add your family</h2><p class="muted">Add each person to track meals and calories.</p><button class="btn" data-act="member-new">Add a person</button></div>`}</div>
     <div class="card sec"><h2>Healthy eating this week</h2><div style="margin-top:8px">${healthSummary()}</div></div>
     <div class="sec"><h2>Family</h2><div class="list">
-      ${state.members.map((x) => `<button class="li" data-act="member-edit" data-id="${x.id}"><span class="emo">${x.emoji}</span><span class="grow"><span class="nm">${esc(x.name)}</span><br><span class="muted small">${esc(AGE_GROUPS[x.ageGroup].label)}${x.calorieGoal && AGE_GROUPS[x.ageGroup].canSetGoal ? ` · goal ${num(x.calorieGoal)} kcal` : ''}</span></span><span class="muted">Edit</span></button>`).join('')}
-      <button class="li" data-act="prefs-edit"><span class="emo">🍽️</span><span class="grow"><span class="nm">Food preferences</span><br><span class="muted small">${h.size} people · ${esc(list(h.cuisines)) || 'any cuisine'} · weeknights ${h.weeknightMinutes} min${h.allergies.length ? ' · allergies: ' + esc(list(h.allergies)) : ''}</span></span><span class="muted">Edit</span></button>
+      ${state.members.map((x) => `<button class="li" data-act="member-edit" data-id="${x.id}">${avatar(x, 'lg')}<span class="grow"><span class="nm">${esc(x.name)}</span><br><span class="muted small">${esc(AGE_GROUPS[x.ageGroup].label)}${x.calorieGoal && AGE_GROUPS[x.ageGroup].canSetGoal ? ` · goal ${num(x.calorieGoal)} kcal` : ''}</span></span><span class="muted">Edit</span></button>`).join('')}
+      <button class="li" data-act="prefs-edit"><span class="cat t-o">${ic('utensils')}</span><span class="grow"><span class="nm">Food preferences</span><br><span class="muted small">${h.size} people · ${esc(list(h.cuisines)) || 'any cuisine'} · weeknights ${h.weeknightMinutes} min${h.allergies.length ? ' · allergies: ' + esc(list(h.allergies)) : ''}</span></span><span class="muted">Edit</span></button>
     </div></div>
     <div class="sec"><h2>Settings</h2><div class="list">
-      <button class="li" data-act="sync-open"><span class="emo">👨‍👩‍👧‍👦</span><span class="grow"><span class="nm">Family sync</span><br><span class="muted small">${esc(syncLine())}</span></span><span class="muted">${syncStatus.on ? 'Open' : 'Set up'}</span></button>
-      <button class="li" data-act="ai-edit"><span class="emo">✨</span><span class="grow"><span class="nm">Claude receipt reading</span><br><span class="muted small">${hasAI() ? 'On. Receipts are read by Claude.' : 'Off. Add an API key for the most accurate scans.'}</span></span><span class="muted">${hasAI() ? 'Change' : 'Set up'}</span></button>
-      <button class="li" data-act="data-open"><span class="emo">💾</span><span class="grow"><span class="nm">Backup and data</span><br><span class="muted small">Save a backup file or start over</span></span><span class="muted">Open</span></button>
-      <button class="li" data-act="about-open"><span class="emo">ℹ️</span><span class="grow"><span class="nm">About the numbers</span><br><span class="muted small">Where nutrition, recipes, prices and brands come from</span></span><span class="muted">Read</span></button>
+      <button class="li" data-act="sync-open"><span class="cat t-g">${ic('users')}</span><span class="grow"><span class="nm">Family sync</span><br><span class="muted small">${esc(syncLine())}</span></span><span class="muted">${syncStatus.on ? 'Open' : 'Set up'}</span></button>
+      <button class="li" data-act="ai-edit"><span class="cat t-p">${ic('sparkle')}</span><span class="grow"><span class="nm">Claude photo and receipt reading</span><br><span class="muted small">${hasAI() ? 'On. Photos and receipts are read by Claude.' : 'Off. Add an API key for the most accurate scans.'}</span></span><span class="muted">${hasAI() ? 'Change' : 'Set up'}</span></button>
+      <button class="li" data-act="data-open"><span class="cat t-b">${ic('download')}</span><span class="grow"><span class="nm">Backup and data</span><br><span class="muted small">Save a backup file or start over</span></span><span class="muted">Open</span></button>
+      <button class="li" data-act="about-open"><span class="cat t-n">${ic('info')}</span><span class="grow"><span class="nm">About the numbers</span><br><span class="muted small">Where nutrition, recipes, prices and brands come from</span></span><span class="muted">Read</span></button>
     </div></div>`;
 }
 registerView('me', render);
@@ -86,8 +87,8 @@ on('log-new', () => {
         <label class="field"><span>Meal</span><select class="input" name="slot">${options(['breakfast', 'lunch', 'dinner', 'snack'], 'snack')}</select></label></div>
       <div class="grid2">${[['protein', 'Protein g'], ['carbs', 'Carbs g'], ['fat', 'Fat g'], ['fiber', 'Fiber g']].map(([k, l]) => `<label class="field"><span>${l} (optional)</span><input class="input" name="${k}" type="number" inputmode="decimal" min="0" step="any"></label>`).join('')}</div>
       <label class="check"><input type="checkbox" name="veg"> It included vegetables or fruit</label>
-      <div><p class="field" style="margin-bottom:6px">Who ate it?</p><div class="chips wrap">${state.members.map((m) => `<button class="chip ${picked.has(m.id) ? 'on' : ''}" data-act="log-who" data-id="${m.id}">${m.emoji} ${esc(m.name)}</button>`).join('')}</div></div>
-      <button class="btn dark block" data-act="log-save">Save to food log</button></div>`);
+      <div><p class="field" style="margin-bottom:6px">Who ate it?</p><div class="chips wrap">${state.members.map((m) => `<button class="chip ${picked.has(m.id) ? 'on' : ''}" data-act="log-who" data-id="${m.id}">${avatar(m)}${esc(m.name)}</button>`).join('')}</div></div>
+      <button class="btn block" data-act="log-save">Save to food log</button></div>`);
   sheet.ctx = { picked };
 });
 on('log-who', (el) => { const p = sheetOf(el).ctx.picked, id = el.dataset.id; p.has(id) ? p.delete(id) : p.add(id); el.classList.toggle('on'); });
@@ -101,27 +102,24 @@ on('log-save', (el) => {
 });
 
 // ---------------- Family members ----------------
-const EMOJI = ['👩', '👨', '🧑', '👧', '👦', '🧒', '👵', '👴', '👶'];
 function memberSheet(m) {
-  const d = m ? { ...m } : { name: '', ageGroup: 'adult', emoji: '🧑', calorieGoal: null };
+  const d = m ? { ...m } : { name: '', ageGroup: 'adult', calorieGoal: null };
   const sheet = openSheet(() => {
     const g = AGE_GROUPS[d.ageGroup];
     return `<h2>${m ? 'Edit ' + esc(m.name) : 'Add a person'}</h2>
     <div class="stack" style="margin-top:12px" data-form="member">
       <label class="field"><span>Name</span><input class="input" name="name" value="${esc(d.name)}" placeholder="Mom, Dad, a first name"></label>
-      <div><p class="field" style="margin-bottom:6px">Picture</p><div class="chips wrap">${EMOJI.map((e) => `<button class="chip ${d.emoji === e ? 'on' : ''}" style="padding:0 12px;font-size:1.3rem" data-act="member-emoji" data-e="${e}">${e}</button>`).join('')}</div></div>
       <label class="field"><span>Age group</span><select class="input" name="ageGroup" data-change="member-age">${options(Object.entries(AGE_GROUPS).map(([k, v]) => [k, v.label]), d.ageGroup)}</select></label>
       ${g.canSetGoal ? `<label class="field"><span>Daily calorie goal (optional)</span><input class="input" name="calorieGoal" type="number" inputmode="numeric" min="${GOAL_MIN}" max="${GOAL_MAX}" step="50" value="${d.calorieGoal || ''}" placeholder="Leave empty to use the healthy range"></label>
         <p class="muted small">Most adults need about ${num(g.range[0])} to ${num(g.range[1])} calories a day (${esc(GUIDELINE_SOURCE)}). Goals below ${num(GOAL_MIN)} are not supported here. For weight loss or medical needs, talk to a doctor or dietitian.</p>`
         : `<p class="note">Kids and teens do not get a calorie target. The app shows balanced-eating guidance and a healthy range of about ${num(g.range[0])} to ${num(g.range[1])} calories a day instead.</p>`}
-      <button class="btn dark block" data-act="member-save">${m ? 'Save changes' : 'Add person'}</button>
+      <button class="btn block" data-act="member-save">${m ? 'Save changes' : 'Add person'}</button>
       ${m ? '<button class="btn danger block" data-act="member-del">Remove this person</button>' : ''}</div>`;
   });
   sheet.ctx = { m, d, read() { Object.assign(d, fields(sheet.body)); } };
 }
 on('member-new', () => memberSheet(null));
 on('member-edit', (el) => memberSheet(state.members.find((m) => m.id === el.dataset.id)));
-on('member-emoji', (el) => { const sh = sheetOf(el); sh.ctx.read(); sh.ctx.d.emoji = el.dataset.e; sh.refresh(); });
 on('member-age', (el) => { const sh = sheetOf(el); sh.ctx.read(); sh.refresh(); });
 on('member-save', (el) => {
   const sh = sheetOf(el), { m, d } = sh.ctx;
@@ -130,7 +128,7 @@ on('member-save', (el) => {
   let goal = AGE_GROUPS[d.ageGroup].canSetGoal && d.calorieGoal ? Number(d.calorieGoal) : null;
   if (goal != null && goal < GOAL_MIN) { goal = GOAL_MIN; toast(`Goal set to ${num(GOAL_MIN)}, the lowest this app supports.`); }
   if (goal != null && goal > GOAL_MAX) goal = GOAL_MAX;
-  const data = { name: d.name, ageGroup: d.ageGroup, emoji: d.emoji, calorieGoal: goal };
+  const data = { name: d.name, ageGroup: d.ageGroup, calorieGoal: goal };
   if (m) Object.assign(m, data); else { const id = uid(); state.members.push({ id, ...data }); who = id; }
   commit(); sh.close();
 });
@@ -152,7 +150,7 @@ on('prefs-edit', () => {
       <label class="field"><span>Foods we dislike (shown less often)</span><input class="input" name="dislikes" value="${esc(list(h.dislikes))}" placeholder="mushrooms, olives"></label>
       <label class="field"><span>Allergies (recipes with these are never shown)</span><input class="input" name="allergies" value="${esc(list(h.allergies))}" placeholder="peanuts, shellfish, dairy, gluten, eggs"></label>
       <label class="field"><span>Foods we never eat</span><input class="input" name="neverEat" value="${esc(list(h.neverEat))}" placeholder="beef, pork, meat"></label>
-      <button class="btn dark block" data-act="prefs-save">Save preferences</button></div>`);
+      <button class="btn block" data-act="prefs-save">Save preferences</button></div>`);
   sheet.ctx = { cuisines };
 });
 on('prefs-cuisine', (el) => { const c = sheetOf(el).ctx.cuisines, v = el.dataset.c; c.has(v) ? c.delete(v) : c.add(v); el.classList.toggle('on'); });
@@ -170,7 +168,7 @@ on('ai-edit', () => openSheet(() => `<h2>Claude receipt reading</h2>
     <label class="field"><span>Anthropic API key</span><input class="input" name="key" type="password" autocomplete="off" value="${esc(getKey())}" placeholder="sk-ant-..."></label>
     <label class="field"><span>Model</span><select class="input" name="model">${options(MODELS, state.settings.model)}</select></label>
     <p class="note">The key is stored only in this browser on this device. It is not included in backups. Each scan costs a few cents, billed by Anthropic to the key's owner. Get a key at <a class="link" href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
-    <button class="btn dark block" data-act="ai-save">Save</button>
+    <button class="btn block" data-act="ai-save">Save</button>
     ${hasAI() ? '<button class="btn danger block" data-act="ai-clear">Remove the key from this device</button>' : ''}</div>`));
 on('ai-save', (el) => { const sh = sheetOf(el), f = fields(sh.body); setKey(f.key); state.settings.model = f.model; commit(); sh.close(); toast(f.key ? 'Claude is set up' : 'Saved'); });
 on('ai-clear', (el) => { setKey(''); commit(); sheetOf(el).close(); toast('Key removed'); });
@@ -187,7 +185,7 @@ on('sync-open', () => openSheet(() => (syncStatus.on
   ? `<h2>Family sync</h2><p class="sub">This phone shares its fridge, recipes, plan, shopping list and food log with everyone signed in to “${esc(syncStatus.name)}”.</p>
     <div class="stack" style="margin-top:12px">
       <p class="note ${syncStatus.state === 'error' ? 'red' : ''}">${syncStatus.state === 'error' ? esc(syncStatus.error) : syncStatus.state === 'syncing' ? 'Syncing now…' : syncStatus.last ? `Last synced ${ago(syncStatus.last)}. Changes are sent within a few seconds and other phones pick them up within about 30 seconds.` : 'Waiting for the first sync.'}</p>
-      <button class="btn dark block" data-act="sync-now">Sync now</button>
+      <button class="btn block" data-act="sync-now">Sync now</button>
       <p class="muted small">To add a phone: open Fridge on it, go to Me, Family sync, and enter the same family name and password.</p>
       <button class="btn danger block" data-act="sync-leave">Stop syncing on this phone</button></div>`
   : `<h2>Family sync</h2><p class="sub">Pick a family name and a password. Enter the same two on every phone and they all share one fridge, recipes, meal plan, shopping list and food log.</p>
@@ -195,7 +193,7 @@ on('sync-open', () => openSheet(() => (syncStatus.on
       <label class="field"><span>Family name</span><input class="input" name="name" autocomplete="off" autocapitalize="none" placeholder="for example: the-rajesh-kitchen"></label>
       <label class="field"><span>Family password (8 or more characters)</span><input class="input" name="password" type="text" autocomplete="off" autocapitalize="none" placeholder="something only your family knows"></label>
       ${joinError ? `<p class="note red">${esc(joinError)}</p>` : ''}
-      <button class="btn dark block" data-act="sync-join" ${joining ? 'disabled' : ''}>${joining ? 'Connecting…' : 'Turn on family sync'}</button>
+      <button class="btn block" data-act="sync-join" ${joining ? 'disabled' : ''}>${joining ? 'Connecting…' : 'Turn on family sync'}</button>
       <p class="note">Your data is locked with the password on this phone before it is sent, so the sync servers only ever hold scrambled text. Pick a password nobody could guess, because anyone with the name and password can see and change your family's data. What is already on this phone is combined with the family's data. Claude API keys stay on each phone.</p></div>`)));
 on('sync-join', async (el) => {
   const sh = sheetOf(el), f = fields(sh.body);
@@ -214,7 +212,7 @@ document.addEventListener('fridge-sync', () => { const row = document.querySelec
 on('data-open', () => openSheet(() => `<h2>Backup and data</h2>
   <p class="sub">Everything is saved on this phone. To share it with the family's other phones, use Family sync. A backup file is a spare copy you keep yourself.</p>
   <div class="stack" style="margin-top:12px">
-    <button class="btn dark block" data-act="data-export">Save a backup file</button>
+    <button class="btn block" data-act="data-export">Save a backup file</button>
     <label class="btn block">Load a backup file<input type="file" accept="application/json,.json" hidden data-change="data-import"></label>
     <button class="btn danger block" data-act="data-reset">Erase everything on this phone</button></div>`));
 on('data-export', () => {

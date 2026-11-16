@@ -4,6 +4,7 @@ import { ABBR, NONFOOD, SKIP_LINE } from '../data/heb.js';
 import { FOODS, CAT_DEFAULTS, CATEGORIES } from '../data/foods.js';
 import { findFood, tokens } from './match.js';
 import { normUnit } from './units.js';
+import { ingredientCategory } from '../data/ingredients.js';
 import { uid } from '../store.js';
 
 // Every word the food table knows, used to judge how confident a reading is.
@@ -61,7 +62,7 @@ export function expandName(raw) {
 export function finishItem(p) {
   const nonFood = p.isFood === false || NONFOOD.test(p.name) || p.category === 'household';
   const food = nonFood || p.noFood ? null : findFood(p.name);
-  const category = nonFood ? 'household' : (food?.cat || (CATEGORIES[p.category] ? p.category : 'other'));
+  const category = nonFood ? 'household' : (food?.cat || (CATEGORIES[p.category] ? p.category : ingredientCategory(p.name) || 'other'));
   const frozen = /\bfrozen\b/i.test(p.name);
   const location = nonFood ? null : frozen ? 'freezer' : (food?.loc || CAT_DEFAULTS[category]?.[0] || 'pantry');
   let qty = p.qty, unit = p.unit ? normUnit(p.unit) : null;
@@ -84,7 +85,7 @@ export function finishItem(p) {
 export function parseReceiptText(text) {
   const found = [];
   let pending = null; // a name-only line waiting for its "2 Ea. @ ..." line
-  const lines = String(text || '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const lines = String(text || '').split(/\r?\n/).map(cleanOcrLine).filter(Boolean);
   for (const line of lines) {
     if (/^(sub\s*-?total|total\b|balance due|\*+\s*total)/i.test(line)) break; // items end here
     if (line.includes('@')) {
@@ -95,18 +96,34 @@ export function parseReceiptText(text) {
       const c = line.match(/^(\d+)\s*(?:ea\.?|each|x)?\s*@/i);
       if (w) target.weight = parseFloat(w[1]);
       else if (c) target.count = parseInt(c[1], 10);
-      const price = line.match(/(\d+\.\d{2})\s*[A-Z]{0,2}$/);
+      const price = line.match(PRICE_AT_END);
       if (price && target.price == null) target.price = parseFloat(price[1]);
       if (!found.includes(target)) found.push(target);
       continue;
     }
     pending = null; // a name-only line that was not followed by a quantity line is just a header
     if (SKIP_LINE.test(line)) continue;
-    const m = line.match(/^(.*?[A-Za-z].*?)\s+(?:[FTXNH]{1,2}\s+)?(-?\d+\.\d{2})\s*(-)?\s*[FTXNH]{0,2}$/);
+    const m = line.match(ITEM_LINE);
     if (m) { if (parseFloat(m[2]) < 0 || m[3]) continue; found.push({ raw: m[1].trim(), price: parseFloat(m[2]) }); }
-    else if (/[A-Za-z]{3,}/.test(line) && !/\d{3,}/.test(line)) pending = { raw: line };
+    else if (/[A-Za-z]{3,}/.test(line) && !/\d{3,}/.test(line) && !/[.,]\d{2}\b/.test(line)) pending = { raw: line };
   }
   return found.filter((p) => p.price != null).map((p) => finishItem({ ...p, ...expandName(p.raw) }));
+}
+
+// A price near the end of a line. Phone text readers often add stray marks after it ("2.18 Ek", "11.98 ©"),
+// so up to 4 non-digit characters after the price are ignored.
+const PRICE_AT_END = /(\d{1,4}[.,]\d{2})\s*-?\s*[^\d\s]{0,4}\s*[^\d\s]{0,2}$/;
+const ITEM_LINE = /^(.*?[A-Za-z].*?)\s+\$?(-?\d{1,4}[.,]\d{2})\s*(-)?\s*[^\d\s]{0,4}\s*[^\d\s]{0,2}$/;
+
+/** Undo common text-reader mistakes on receipts before parsing a line. */
+export function cleanOcrLine(line) {
+  return String(line || '').replace(/\s+/g, ' ').trim()
+    .replace(/(\d)\s*[1Il]b\b/g, '$1 lb')              // "2.36 1b" -> "2.36 lb"
+    .replace(/\/\s*[1Il]b\b/g, '/lb')                   // "/1b" -> "/lb"
+    .replace(/\b0Z\b/g, 'OZ').replace(/(\d)\s?0Z\b/g, '$1 OZ') // "8 0Z" -> "8 OZ"
+    .replace(/([A-Z])0(?=[A-Z])/g, '$1O')               // "M0ZZ" -> "MOZZ"
+    .replace(/(\d[.,]\d)[/|'](\d)\b/g, '$1$2')          // "5.9/7" -> "5.97"
+    .replace(/(\d),(\d{2})\b/g, '$1.$2');               // "2,18" -> "2.18"
 }
 
 /** Combine several review rows into one (adds quantities when the units match). */
