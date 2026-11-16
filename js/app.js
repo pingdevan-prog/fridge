@@ -45,6 +45,10 @@ if (shared?.length) openShared(shared);
 
 // Installable, and the app shell works offline.
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+  // A new version took over: reload once so the whole app comes from the same version.
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
 }
 window.addEventListener('offline', () => toast('You are offline. Your fridge and saved recipes still work.'));
