@@ -14,7 +14,7 @@ createServer(async (req, res) => {
   const file = join(root, path.endsWith('/') ? path + 'index.html' : path);
   try {
     const body = await readFile(file);
-    res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
     res.end(body);
   } catch {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
