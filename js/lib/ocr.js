@@ -26,6 +26,50 @@ async function loadImage(src) {
   } finally { if (src instanceof Blob) setTimeout(() => URL.revokeObjectURL(url), 1000); }
 }
 
+/**
+ * Estimate the paper's brightness everywhere in the photo, in plain JavaScript so every browser gives the
+ * same result (Safari ignores canvas blur filters and shrinks images roughly, which ruined this step on iPhones).
+ * gray: brightness per pixel. Returns a function bg(x, y).
+ */
+function paperBrightness(gray, W, H) {
+  const T = globalThis.__ocrTune || {};
+  const cell = T.cell || Math.max(10, Math.round(Math.max(W, H) / (T.cellDiv || 168)));
+  const cols = Math.ceil(W / cell), rows = Math.ceil(H / cell);
+  // 1. Brightness of each cell: the 95th percentile (the paper), so dark text inside a cell does not pull it down.
+  const level = new Float32Array(cols * rows), hist = new Uint32Array(256);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    hist.fill(0);
+    const x0 = c * cell, y0 = r * cell, x1 = Math.min(W, x0 + cell), y1 = Math.min(H, y0 + cell);
+    let n = 0;
+    for (let y = y0; y < y1; y += 2) for (let x = x0; x < x1; x += 2) { hist[gray[y * W + x]]++; n++; }
+    let acc = 0, v = 255;
+    if (T.mean) { let sum = 0; for (let i = 0; i < 256; i++) sum += hist[i] * i; v = sum / Math.max(1, n); }
+    else for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc >= n * (T.pct || 0.95)) { v = i; break; } }
+    level[r * cols + c] = v;
+  }
+  // 2. Take the brightest neighbour (cells full of text borrow the paper level next to them), then smooth twice.
+  const pass = (srcA, fn) => {
+    const out = new Float32Array(srcA.length);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const vals = [];
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const rr = r + dr, cc = c + dc; if (rr >= 0 && rr < rows && cc >= 0 && cc < cols) vals.push(srcA[rr * cols + cc]); }
+      out[r * cols + c] = fn(vals);
+    }
+    return out;
+  };
+  const avg = (v) => v.reduce((a, b) => a + b, 0) / v.length;
+  let bg = T.mean ? level : pass(level, (v) => Math.max(...v));
+  bg = pass(pass(bg, avg), avg);
+  if (T.mean) bg = pass(pass(bg, avg), avg);
+  // 3. Smooth (bilinear) lookup between cell centres.
+  return (x, y) => {
+    const fx = Math.min(cols - 1, Math.max(0, x / cell - 0.5)), fy = Math.min(rows - 1, Math.max(0, y / cell - 0.5));
+    const c0 = Math.floor(fx), r0 = Math.floor(fy), c1 = Math.min(cols - 1, c0 + 1), r1 = Math.min(rows - 1, r0 + 1), tx = fx - c0, ty = fy - r0;
+    const top = bg[r0 * cols + c0] * (1 - tx) + bg[r0 * cols + c1] * tx, bot = bg[r1 * cols + c0] * (1 - tx) + bg[r1 * cols + c1] * tx;
+    return top * (1 - ty) + bot * ty;
+  };
+}
+
 /** Flattened, ink-only black-and-white versions of a photo, one per threshold. */
 export async function cleanPhoto(src, { maxSide = 3000, thresholds = [150, 120], invert = false, both = 0 } = {}) {
   const img = await loadImage(src);
@@ -35,40 +79,27 @@ export async function cleanPhoto(src, { maxSide = 3000, thresholds = [150, 120],
   const g = base.getContext('2d', { willReadFrequently: true });
   g.imageSmoothingQuality = 'high';
   g.drawImage(img, 0, 0, W, H);
-  // Background: shrink a lot, blur, stretch back up.
-  const small = document.createElement('canvas'); small.width = Math.max(8, Math.round(W / 24)); small.height = Math.max(8, Math.round(H / 24));
-  const sg = small.getContext('2d'); sg.filter = 'blur(2px)'; sg.drawImage(base, 0, 0, small.width, small.height);
-  const bgc = document.createElement('canvas'); bgc.width = W; bgc.height = H;
-  const bgg = bgc.getContext('2d', { willReadFrequently: true }); bgg.imageSmoothingQuality = 'high'; bgg.drawImage(small, 0, 0, W, H);
-  const src8 = g.getImageData(0, 0, W, H).data, bg = bgg.getImageData(0, 0, W, H).data;
+  const px = g.getImageData(0, 0, W, H).data;
+  base.width = base.height = 0; // free the memory right away (iPhones have a small canvas memory budget)
+  const gray = new Uint8ClampedArray(W * H);
+  for (let i = 0, p = 0; p < gray.length; i += 4, p++) gray[p] = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+  const bgAt = paperBrightness(invert ? gray.map((v) => 255 - v) : gray, W, H);
+  // Brightness relative to the paper around it: paper -> 255, ink -> dark.
   const norm = new Uint8ClampedArray(W * H);
-  if (both) {
-    // Labels: text can be darker OR lighter than the label behind it. Mark anything that differs
-    // from its surroundings by more than `both` levels as ink, so both kinds come out black on white.
+  for (let y = 0, p = 0; y < H; y++) for (let x = 0; x < W; x++, p++) {
+    const v = invert ? 255 - gray[p] : gray[p], b = bgAt(x, y) || 1;
+    norm[p] = both ? 255 - Math.min(255, Math.abs(v - b) * (255 / both) * 0.5) : Math.min(255, (v / b) * 255);
+  }
+  const make = (test) => {
     const c = document.createElement('canvas'); c.width = W; c.height = H;
     const cg = c.getContext('2d'), out = cg.createImageData(W, H), d = out.data;
-    for (let i = 0; i < src8.length; i += 4) {
-      const v = src8[i] * 0.299 + src8[i + 1] * 0.587 + src8[i + 2] * 0.114, b = bg[i] * 0.299 + bg[i + 1] * 0.587 + bg[i + 2] * 0.114;
-      const o = Math.abs(v - b) > both ? 0 : 255; d[i] = d[i + 1] = d[i + 2] = o; d[i + 3] = 255;
-    }
-    cg.putImageData(out, 0, 0);
-    return [c];
-  }
-  for (let i = 0, p = 0; i < src8.length; i += 4, p++) {
-    let v = src8[i] * 0.299 + src8[i + 1] * 0.587 + src8[i + 2] * 0.114;
-    let b = bg[i] * 0.299 + bg[i + 1] * 0.587 + bg[i + 2] * 0.114;
-    if (invert) { v = 255 - v; b = 255 - b; }   // light text on a dark label becomes dark text on light
-    b = b || 1;
-    norm[p] = Math.min(255, (v / b) * 255);
-  }
-  return thresholds.map((t) => {
-    const c = document.createElement('canvas'); c.width = W; c.height = H;
-    const cg = c.getContext('2d');
-    const out = cg.createImageData(W, H), d = out.data;
-    for (let p = 0, i = 0; p < norm.length; p++, i += 4) { const o = norm[p] < t ? 0 : 255; d[i] = d[i + 1] = d[i + 2] = o; d[i + 3] = 255; }
+    for (let p = 0, i = 0; p < norm.length; p++, i += 4) { const o = test(norm[p]) ? 0 : 255; d[i] = d[i + 1] = d[i + 2] = o; d[i + 3] = 255; }
     cg.putImageData(out, 0, 0);
     return c;
-  });
+  };
+  // Labels: text can be darker OR lighter than the label behind it; both count as ink.
+  if (both) return [make((v) => v < 128)];
+  return thresholds.map((t) => make((v) => v < t));
 }
 
 /** Lines of text from a reading, leaving out words the reader had very low confidence in. */
@@ -78,7 +109,7 @@ function linesOf(data, minConf = 20) {
 
 // Three readings that make different mistakes; the parser keeps the best version of each item.
 // psm 6 reads the receipt as one block, so each name stays on the same line as its price.
-const PASSES = [{ maxSide: 4000, threshold: 160, psm: '6' }, { maxSide: 3000, threshold: 160, psm: '6' }, { maxSide: 3000, threshold: 180, psm: '4' }];
+const PASSES = [{ maxSide: 4000, threshold: 140, psm: '6' }, { maxSide: 3000, threshold: 155, psm: '6' }, { maxSide: 3000, threshold: 175, psm: '4' }];
 
 /**
  * Read a receipt photo. Returns several readings, each an array of text lines.

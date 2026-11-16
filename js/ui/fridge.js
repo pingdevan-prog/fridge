@@ -5,7 +5,7 @@ import { findFood } from '../lib/match.js';
 import { ingredientCategory } from '../data/ingredients.js';
 import { UNITS, fmtAmount } from '../lib/units.js';
 import { itemNutrition, eatNutrition, usdaSearch } from '../lib/nutrition.js';
-import { parseReceiptText, parseReceiptReadings, finishItem, splitBrand, mergeItems } from '../lib/receipt.js';
+import { parseReceiptText, parseReceiptReadings, joinReceiptParts, finishItem, splitBrand, mergeItems } from '../lib/receipt.js';
 import { readReceiptPhoto } from '../lib/ocr.js';
 import { hasAI, aiParseReceipt, aiIdentifyFoods } from '../lib/ai.js';
 import { checkOffFromReceipt } from '../lib/shopping.js';
@@ -227,12 +227,13 @@ on('eat-save', (el) => {
 let review = null; // { items: [...], selected: Set, source }
 
 const openScan = (el) => { sheetOf(el)?.close(); return openSheet(() => `<h2>Scan a receipt</h2>
-  <p class="sub">${hasAI() ? 'Claude will read your receipt and name every item.' : 'Your receipt is read on this device. For the most accurate results, add a Claude API key in Me, under Settings.'}</p>
+  <p class="sub">${hasAI() ? 'Claude will read your receipt and name every item.' : 'Your receipt is read on this phone.'}</p>
   <div class="stack" style="margin-top:14px">
     <label class="btn block">${ic('camera')}Take a photo<input type="file" accept="image/*" capture="environment" hidden data-change="scan-file"></label>
-    <label class="btn soft block">${ic('images')}Upload a photo or screenshot<input type="file" accept="image/*" hidden data-change="scan-file"></label>
+    <label class="btn soft block">${ic('images')}Choose photos or a screenshot<input type="file" accept="image/*" multiple hidden data-change="scan-file"></label>
     <button class="btn ghost block" data-act="scan-paste">Paste receipt text</button>
-    <p class="muted small">Tip: lay the receipt flat in good light and fill the frame. Long receipts work best as two photos.</p>
+    <div class="note"><b>For the best results:</b> lay the receipt flat in good light and get close enough that the words are easy to read.
+      For a long receipt, take two or three photos (top, middle, bottom) with a little overlap. You can add more photos from the review screen.</div>
   </div>`); };
 on('scan-open', openScan);
 
@@ -248,9 +249,27 @@ export async function toDataUrl(file, max = 1800) {
     return c.toDataURL('image/jpeg', 0.86);
   } finally { URL.revokeObjectURL(url); }
 }
+/** Read receipt photos (several photos = parts of one long receipt). Returns items with .subtotal. */
+async function readReceipts(files, set) {
+  const parts = [];
+  for (const [n, file] of files.entries()) {
+    const which = files.length > 1 ? `photo ${n + 1} of ${files.length}` : 'your receipt';
+    if (hasAI()) {
+      set(`Claude is reading ${which}. This usually takes 10 to 30 seconds.`);
+      const raw = await aiParseReceipt(await toDataUrl(file));
+      parts.push(raw.map((r) => finishItem({ raw: r.raw, name: String(r.name || r.raw || 'Item'), brand: r.brand || '', qty: Number(r.qty) || 1, unit: r.unit || 'each',
+        price: r.price == null ? null : Number(r.price), category: r.category, isFood: r.isFood !== false, conf: Number(r.confidence) || 0.5 })));
+    } else {
+      parts.push(parseReceiptReadings(await readReceiptPhoto(file, (p) => set(`Reading ${which} on this phone: ${p}%. Long receipts take up to a minute.`))));
+    }
+  }
+  return joinReceiptParts(parts);
+}
+
 on('scan-file', async (el) => {
-  const file = el.files?.[0];
-  if (!file) return;
+  const files = [...(el.files || [])];
+  el.value = '';
+  if (!files.length) return;
   sheetOf(el)?.close();
   let status = 'Getting your photo ready…', error = '';
   const sheet = openSheet(() => error
@@ -258,20 +277,29 @@ on('scan-file', async (el) => {
     : `<div class="loading"><div class="spin"></div><h2>Reading your receipt</h2><p class="muted">${esc(status)}</p></div>`);
   const set = (s) => { status = s; sheet.refresh(); };
   try {
-    const dataUrl = await toDataUrl(file);
-    let items;
-    if (hasAI()) {
-      set('Claude is reading every line. This usually takes 10 to 30 seconds.');
-      const raw = await aiParseReceipt(dataUrl);
-      items = raw.map((r) => finishItem({ raw: r.raw, name: String(r.name || r.raw || 'Item'), brand: r.brand || '', qty: Number(r.qty) || 1, unit: r.unit || 'each',
-        price: r.price == null ? null : Number(r.price), category: r.category, isFood: r.isFood !== false, conf: Number(r.confidence) || 0.5 }));
-    } else {
-      items = parseReceiptReadings(await readReceiptPhoto(file, (p) => set(`Reading every line on this phone: ${p}%. Long receipts take up to a minute.`)));
-    }
-    if (!items.length) throw new Error('No items were found. Make sure the whole receipt is in the photo and the print is sharp, or paste the receipt text instead.');
+    const items = await readReceipts(files, set);
+    if (!items.length) throw new Error('No items were found. Get closer so the words are easy to read, lay the receipt flat in good light, and try again.');
     sheet.close();
-    openReview(items, hasAI() ? 'Read by Claude' : 'Read on this phone', null, { subtotal: items.subtotal ?? null, summaryKind: items.summaryKind });
+    openReview(items, hasAI() ? 'Read by Claude' : 'Read on this phone', null, { subtotal: items.subtotal ?? null, summaryKind: items.summaryKind, receipt: true });
   } catch (e) { error = e.message || 'Something went wrong while reading the receipt.'; sheet.refresh(); }
+});
+
+// Review screen: add another photo of the same receipt (for long receipts) and merge it in.
+on('rv-more', async (el) => {
+  const files = [...(el.files || [])];
+  el.value = '';
+  if (!files.length || !review) return;
+  const sh = sheetOf(el);
+  review.busy = 'Reading the new photo…'; sh.refresh();
+  try {
+    const more = await readReceipts(files, (s) => { review.busy = s; sh.refresh(); });
+    const before = review.items.length;
+    const joined = joinReceiptParts([Object.assign([...review.items], { subtotal: review.subtotal, summaryKind: review.summaryKind }), more]);
+    review.items = [...joined];
+    if (joined.subtotal != null) { review.subtotal = joined.subtotal; review.summaryKind = joined.summaryKind; }
+    toast(`${review.items.length - before} more ${review.items.length - before === 1 ? 'item' : 'items'} added from the new photo`);
+  } catch (e) { toast(e.message || 'That photo could not be read.'); }
+  review.busy = null; sh.refresh();
 });
 on('scan-open-again', (el) => openScan(el));
 
@@ -320,13 +348,15 @@ function totalCheck() {
 }
 
 export function openReview(items, source, photo = null, opts = {}) {
-  review = { items, selected: new Set(), source: String(source).replace(/\.$/, ''), photo, subtotal: opts.subtotal ?? null, summaryKind: opts.summaryKind || 'subtotal' };
+  review = { items, selected: new Set(), source: String(source).replace(/\.$/, ''), photo, subtotal: opts.subtotal ?? null, summaryKind: opts.summaryKind || 'subtotal', receipt: !!opts.receipt, busy: null };
   openSheet(() => {
     const flagged = review.items.filter((i) => i.conf < 0.7).length, food = review.items.filter((i) => i.isFood).length;
     return `<h2>Review ${review.items.length} ${review.items.length === 1 ? 'item' : 'items'}</h2>
     ${review.photo ? `<img class="review-photo" src="${review.photo}" alt="Your photo">` : ''}
     <p class="sub">${esc(review.source)}. Fix anything that looks off before it goes in your fridge.${flagged ? ` <b>${flagged} ${flagged === 1 ? 'needs' : 'need'} a quick look.</b>` : ''}</p>
     ${totalCheck()}
+    ${review.receipt ? (review.busy ? `<p class="note" style="margin-top:10px">${esc(review.busy)}</p>`
+      : `<label class="btn ghost block" style="margin-top:10px">${ic('camera')}Add a photo of more of this receipt<input type="file" accept="image/*" capture="environment" hidden data-change="rv-more"></label>`) : ''}
     <div class="stack tight" style="margin-top:12px">${review.items.map((it) => reviewRow(it, review.selected.has(it.id))).join('') || '<p class="muted center">Everything was removed.</p>'}</div>
     <button class="btn ghost block" style="margin-top:10px" data-act="rv-add">${ic('plus')}Add a missed item</button>
     <div class="sticky-bar"><button class="btn ghost" data-act="rv-merge" ${review.selected.size < 2 ? 'disabled' : ''}>Merge ${review.selected.size > 1 ? review.selected.size : ''}</button>

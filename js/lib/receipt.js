@@ -93,7 +93,7 @@ export function finishItem(p) {
 // Text read from a photo adds noise, so every step below is tolerant of common misreads.
 
 const MONEY = /(\d{1,3})\s?[.,:°'](\d{2})(?!\d|\s?[APap]\.?[Mm]?\b)/g; // 2.98, 2,98, 5°35 (but not times like 6:16P)
-const FLAG = /^(?:[FTNXWHE][FTNXWHSEfo]?|[|!I1l+:;.,©®£¢€*_~-]{1,3}|Fo|Ff|FSF|FN|FH|FE|Ek|EE|F4)$/;
+const FLAG = /^(?:[FT][A-Za-z0-9]?|[NXWHE][FTNXWHSEfowh]?|[|!Iil1+:;.,©®£¢€*_~»«-]{1,3}|FSF|SF|Ek|EE)$/;
 const ITEMS_END = /^\W{0,3}(sub\s*-?\s*total|total\b|balance\s*due|\*+\s*total)/i;
 // Lines that only appear after the items (payment, footer). If the total line was misread, these still end the list.
 const AFTER_ITEMS = /\b(items\s*purchased|eps\s*amex|visa\s*eps|visa\s*credit|contactless|appr\s*no|ref\s*no|cashier|self\s*checkout|receipt\s*expires|store\s*hours|food-drugs|pharmacy)\b/i;
@@ -105,6 +105,8 @@ function amounts(line) {
   for (const m of text.matchAll(MONEY)) out.push(parseFloat(m[1] + '.' + m[2]));
   // A price printed right after the tax flag sometimes loses its decimal point: "F147" is 1.47.
   if (!out.length) { const m = text.match(/(?:^|\s)[FT][WHo]?\s?(\d{3,4})\s*\W{0,3}$/); if (m) out.push(parseInt(m[1], 10) / 100); }
+  // ...or the decimal point reads as a 7: "3786" is 3.86, "15797" is 15.97.
+  if (!out.length) { const m = text.match(/(?:^|\s)[A-Za-z]{0,2}(\d{1,2})7(\d{2})\s*\W{0,3}$/); if (m) out.push(parseFloat(m[1] + '.' + m[2])); }
   return out;
 }
 const letterRun = (w) => /[A-Za-z]{3,}/.test(w) || /^(HEB|HCF|CM|MC|SI|FS|SW|SZ|ORG|BR)$/i.test(w);
@@ -157,7 +159,23 @@ function cleanName(text) {
   let words = String(text).replace(/[|]/g, ' ').split(/\s+/).filter(Boolean);
   while (words.length && !letterRun(words[0])) words.shift();                 // line numbers and junk in front
   while (words.length && (FLAG.test(words[words.length - 1]) || !/[A-Za-z0-9]/.test(words[words.length - 1]))) words.pop(); // tax flags behind
-  return words.map((w) => w.replace(/^[^A-Za-z0-9&]+|[^A-Za-z0-9%&.']+$/g, '')).filter(Boolean).join(' ');
+  return words.map((w) => w.replace(/^[^A-Za-z0-9&]+|[^A-Za-z0-9%&.']+$/g, '')).filter((w) => w && !/^[FT][A-Z]?\d{2,4}$/.test(w)).join(' ');
+}
+
+/**
+ * Choose the receipt's subtotal from one or more readings. The total is the most reliable number (readings tend
+ * to agree on it); a subtotal only counts if it is plausible next to it (between 85% and 100% of the total).
+ * Falls back to total minus tax, then to the total itself.
+ */
+function pickSummary(readings) {
+  const mostCommon = (vals) => { const m = new Map(); vals.filter((v) => v != null).forEach((v) => m.set(v, (m.get(v) || 0) + 1)); return m.size ? [...m].sort((a, b) => b[1] - a[1])[0][0] : null; };
+  const total = mostCommon(readings.map((r) => r.total)), tax = mostCommon(readings.map((r) => r.tax));
+  const subs = readings.map((r) => r.sub).filter((v) => v != null && (total == null || (v <= total + 0.01 && v >= total * 0.85)));
+  const sub = mostCommon(subs);
+  if (sub != null) return { subtotal: sub, summaryKind: 'subtotal' };
+  if (total != null && tax != null && tax < total * 0.15) return { subtotal: Math.round((total - tax) * 100) / 100, summaryKind: 'subtotal' };
+  if (total != null) return { subtotal: total, summaryKind: 'total' };
+  return { subtotal: null, summaryKind: null };
 }
 
 /** Read the subtotal (or total minus tax) printed after the items, so the review can say if anything is missing. */
@@ -169,19 +187,20 @@ function readSummary(lines, found) {
     const v = m[m.length - 1];
     if (/sub\s*-?\s*total/i.test(line)) sub = v; else if (/\btax\b/i.test(line)) tax = v; else if (/\btotal\b/i.test(line) && total == null) total = v;
   }
-  found.subtotal = sub ?? (total != null && tax != null ? Math.round((total - tax) * 100) / 100 : total);
-  found.summaryKind = sub != null || (total != null && tax != null) ? 'subtotal' : total != null ? 'total' : null;
+  Object.assign(found, { sub, tax, total });
+  Object.assign(found, pickSummary([found]));
 }
 
 /** Turn a list of text lines into receipt items (before name expansion). */
 function readLines(lines) {
   const found = [];
   let pending = null; // a name-only line waiting for its quantity line
-  for (const raw of lines) {
+  for (const [idx, raw] of lines.entries()) {
     const line = cleanOcrLine(raw);
     if (!line) continue;
-    if (ITEMS_END.test(line) || AFTER_ITEMS.test(line)) { readSummary(lines.slice(lines.indexOf(raw)), found); break; }
-    const q = qtyLine(line) || (pending ? contextQty(line) : null);
+    if (ITEMS_END.test(line) || AFTER_ITEMS.test(line)) { readSummary(lines.slice(idx), found); break; }
+    const last = found[found.length - 1];
+    const q = qtyLine(line) || (pending || (last && !last.hasQty && amounts(line).length >= 2) ? contextQty(line) : null);
     if (q) {
       const target = pending || found[found.length - 1];
       pending = null;
@@ -217,7 +236,7 @@ function quality(p) {
 /** Parse plain receipt text (pasted digital receipt, or text read from a photo). */
 export function parseReceiptText(text) {
   const found = readLines(String(text || '').split(/\r?\n/));
-  return Object.assign(finishReceipt(found), { subtotal: found.subtotal ?? null, summaryKind: found.summaryKind || null });
+  return Object.assign(finishReceipt(found, found.subtotal ?? null), { subtotal: found.subtotal ?? null, summaryKind: found.summaryKind || null });
 }
 
 /**
@@ -228,7 +247,7 @@ export function parseReceiptText(text) {
  */
 export function parseReceiptReadings(readings) {
   const raw = readings.map((lines) => readLines(lines));
-  const summary = raw.find((r) => r.summaryKind === 'subtotal') || raw.find((r) => r.subtotal != null) || {};
+  const summary = pickSummary(raw);
   const parsed = raw.map((r) => r.filter((p) => p.price != null || p.hasQty));
   parsed.sort((a, b) => b.length - a.length);
   const [base = [], ...others] = parsed;
@@ -260,7 +279,26 @@ export function parseReceiptReadings(readings) {
     const withQty = variants.find((v) => v.hasQty && v.price === price) || variants.find((v) => v.hasQty);
     return { ...named, price, weight: withQty?.weight, count: withQty?.count, hasQty: !!withQty, agree: votes.size ? Math.max(...votes.values()) : 0 };
   });
-  return Object.assign(finishReceipt(merged), { subtotal: summary.subtotal ?? null, summaryKind: summary.summaryKind || null });
+  return Object.assign(finishReceipt(merged, summary.subtotal ?? null), { subtotal: summary.subtotal ?? null, summaryKind: summary.summaryKind || null });
+}
+
+/**
+ * Join receipt items read from several photos of one long receipt (top half, bottom half...).
+ * Lines that appear in both photos (the overlap) are kept once. The subtotal comes from the last photo.
+ */
+export function joinReceiptParts(parts) {
+  const out = [];
+  for (const part of parts) {
+    const tail = out.slice(-10);
+    for (const it of part) {
+      const dup = tail.find((t) => t.price === it.price && nameOverlap(t.name, it.name) >= 0.5 && !t._used);
+      if (dup) { dup._used = true; if (it.conf > dup.conf) Object.assign(dup, { name: it.name, conf: it.conf, foodKey: it.foodKey, category: it.category }); continue; }
+      out.push(it);
+    }
+  }
+  out.forEach((i) => delete i._used);
+  const last = parts.filter((p) => p.subtotal != null).pop() || {};
+  return Object.assign(out, { subtotal: last.subtotal ?? null, summaryKind: last.summaryKind || null });
 }
 
 function nameOverlap(a, b) {
@@ -271,8 +309,25 @@ function nameOverlap(a, b) {
   return hit / Math.min(A.size, B.size);
 }
 
-function finishReceipt(found) {
-  return found
+/**
+ * Remove readings that cannot be real items: a misread total line ("Tots 20.96" whose price is the sum of
+ * everything above it, or the printed total), and, when the prices add up to far more than the receipt says,
+ * prices bigger than half the receipt (a misread decimal point).
+ */
+function sanityCheck(items, subtotal) {
+  let out = [], running = 0;
+  for (const p of items) {
+    const isTotal = p.price != null && out.length >= 2 && (Math.abs(p.price - running) <= 0.1 || (subtotal != null && Math.abs(p.price - subtotal) <= 0.1 && p.price > 10));
+    if (isTotal) continue;
+    out.push(p);
+    running += p.price || 0;
+  }
+  if (subtotal != null && running > subtotal * 1.15) out = out.filter((p) => !(p.price > Math.max(25, subtotal * 0.5)));
+  return out;
+}
+
+function finishReceipt(found, subtotal = null) {
+  return sanityCheck(found, subtotal)
     .filter((p) => (p.price != null || p.hasQty) && quality(p) > 0)
     .map((p) => {
       const fixed = p.raw.split(/\s+/).map((w) => (ABBR[w.toUpperCase()] || KNOWN.has(w.toUpperCase()) ? w : correct(w.toUpperCase()) || w)).join(' ');
