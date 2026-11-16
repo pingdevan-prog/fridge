@@ -34,7 +34,8 @@ const PRODUCT_RULES = [
 
 // Product forms that belong at the end of a name ("orange" + "preserves").
 const FORMS = new Set(['bites', 'tots', 'fries', 'chips', 'crisps', 'sauce', 'mix', 'spread', 'seasoning', 'preserves', 'jam', 'jelly', 'soda', 'juice', 'bar', 'bars',
-  'cookies', 'crackers', 'candy', 'dip', 'dressing', 'soup', 'bread', 'tortillas', 'noodles', 'pasta', 'salsa', 'puree', 'paste', 'broth', 'flakes', 'cereal']);
+  'cookies', 'crackers', 'candy', 'dip', 'dressing', 'soup', 'bread', 'tortillas', 'noodles', 'pasta', 'salsa', 'puree', 'paste', 'broth', 'flakes', 'cereal',
+  'enchiladas', 'burritos', 'tacos', 'taquitos', 'tamales', 'nuggets', 'dumplings', 'potstickers', 'meatballs', 'patties', 'burgers', 'strips', 'tenders', 'wings', 'pizza', 'pie', 'bowl', 'bowls']);
 // Flavour words: on their own they rarely say what the product is ("Pretzel crisps garlic parmesan").
 const FLAVORS = new Set(['garlic', 'parmesan', 'cheddar', 'dill', 'honey', 'maple', 'lime', 'ranch', 'bbq', 'chipotle', 'vanilla', 'cinnamon', 'spicy', 'hot',
   'sweet', 'salted', 'smoked', 'pepper', 'butter', 'chocolate', 'strawberry', 'watermelon', 'mango', 'coconut', 'lemon', 'orange', 'mint', 'sriracha', 'teriyaki']);
