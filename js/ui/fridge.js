@@ -7,6 +7,7 @@ import { UNITS, fmtAmount } from '../lib/units.js';
 import { itemNutrition, eatNutrition, usdaSearch } from '../lib/nutrition.js';
 import { parseReceiptText, parseReceiptReadings, joinReceiptParts, finishItem, splitBrand, mergeItems } from '../lib/receipt.js';
 import { readReceiptPhoto } from '../lib/ocr.js';
+import { simpleName } from '../lib/names.js';
 import { hasAI, aiParseReceipt, aiIdentifyFoods } from '../lib/ai.js';
 import { checkOffFromReceipt } from '../lib/shopping.js';
 import { ic, catBadge, avatar } from './icons.js';
@@ -257,8 +258,13 @@ async function readReceipts(files, set) {
     if (hasAI()) {
       set(`Claude is reading ${which}. This usually takes 10 to 30 seconds.`);
       const raw = await aiParseReceipt(await toDataUrl(file));
-      parts.push(raw.map((r) => finishItem({ raw: r.raw, name: String(r.name || r.raw || 'Item'), brand: r.brand || '', qty: Number(r.qty) || 1, unit: r.unit || 'each',
-        price: r.price == null ? null : Number(r.price), category: r.category, isFood: r.isFood !== false, conf: Number(r.confidence) || 0.5 })));
+      parts.push(raw.map((r) => {
+        const plain = simpleName([r.brand, r.name || r.raw].filter(Boolean).join(' '));
+        const item = finishItem({ raw: r.raw, name: plain.name || String(r.name || r.raw || 'Item'), brand: '', qty: Number(r.qty) || 1, unit: r.unit || 'each',
+          price: r.price == null ? null : Number(r.price), category: r.category, isFood: r.isFood !== false, conf: Number(r.confidence) || 0.5 });
+        item.brand = plain.brand || r.brand || '';
+        return item;
+      }));
     } else {
       parts.push(parseReceiptReadings(await readReceiptPhoto(file, (p) => set(`Reading ${which} on this phone: ${p}%. Long receipts take up to a minute.`))));
     }
@@ -408,7 +414,7 @@ on('rv-confirm', (el) => {
   withUndo(() => `${food.length} ${food.length === 1 ? 'food' : 'foods'} added to your fridge.${ticked ? ` ${ticked} shopping list ${ticked === 1 ? 'item' : 'items'} checked off.` : ''}`, () => {
     for (const it of items) {
       if (!it.isFood) { state.householdItems.push({ id: uid(), name: it.name, qty: it.qty, unit: it.unit, price: it.price, addedAt: today() }); continue; }
-      const { brand, name } = splitBrand(it.name);
+      const { brand, name } = it.brand ? { brand: it.brand, name: it.name } : splitBrand(it.name);
       addToFridge({ name, brand, qty: it.qty, unit: it.unit, price: it.price ?? undefined, foodKey: it.noFood ? false : it.foodKey, category: it.category, location: it.location, nutrition: it.nutrition });
       if (it.foodKey && it.price != null) state.prices[it.foodKey] = { price: it.price, qty: it.qty, unit: it.unit, date: today() };
     }

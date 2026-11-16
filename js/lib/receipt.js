@@ -6,6 +6,7 @@ import { findFood, tokens } from './match.js';
 import { normUnit } from './units.js';
 import { ingredientCategory, INGREDIENTS } from '../data/ingredients.js';
 import { uid } from '../store.js';
+import { simpleName } from './names.js';
 
 // Every word the food table knows, used to judge how confident a reading is.
 const VOCAB = new Set();
@@ -332,7 +333,11 @@ function finishReceipt(found, subtotal = null) {
     .map((p) => {
       const fixed = p.raw.split(/\s+/).map((w) => (ABBR[w.toUpperCase()] || KNOWN.has(w.toUpperCase()) ? w : correct(w.toUpperCase()) || w)).join(' ');
       const q = quality({ raw: fixed });
-      const item = finishItem({ ...p, raw: p.raw, ...expandName(fixed) });
+      const ex = expandName(fixed);
+      // Plain everyday name ("Barilla Whole Grain Penne" -> "Penne pasta"); the brand is kept on the side.
+      const plain = simpleName([ex.brand, ex.name].filter(Boolean).join(' '));
+      const item = finishItem({ ...p, raw: p.raw, ...ex, name: plain.name || ex.name, brand: '' });
+      item.brand = plain.brand || ex.brand || '';
       // Confidence comes from how many words were recognised, so garbled lines get flagged for a check.
       item.conf = Math.min(item.conf, 0.35 + 0.65 * q - (p.price == null ? 0.2 : 0));
       return item;
