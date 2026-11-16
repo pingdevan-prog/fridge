@@ -4,7 +4,7 @@ import { ABBR, NONFOOD, SKIP_LINE } from '../data/heb.js';
 import { FOODS, CAT_DEFAULTS, CATEGORIES } from '../data/foods.js';
 import { findFood, tokens } from './match.js';
 import { normUnit } from './units.js';
-import { ingredientCategory } from '../data/ingredients.js';
+import { ingredientCategory, INGREDIENTS } from '../data/ingredients.js';
 import { uid } from '../store.js';
 
 // Every word the food table knows, used to judge how confident a reading is.
@@ -38,7 +38,10 @@ export function expandName(raw) {
 
   let words = s.trim().split(/\s+/).filter(Boolean);
   let brand = '';
-  if (words[0] === 'HEB' || words[0] === 'H-E-B') { brand = 'H-E-B'; words.shift(); if (/^ORG/.test(words[0] || '')) { brand = 'H-E-B Organics'; words.shift(); } }
+  if (words[0] === 'HEB' || words[0] === 'H-E-B') {
+    brand = 'H-E-B'; words.shift();
+    if (/^ORG/.test(words[0] || '')) { brand = 'H-E-B Organics'; words.shift(); } else if (words[0] === 'SI') { brand = 'H-E-B Select Ingredients'; words.shift(); }
+  }
   else if (words[0] === 'HCF') { brand = 'Hill Country Fare'; words.shift(); }
   else if (words[0] === 'CM') { brand = 'Central Market'; words.shift(); if (/^ORG/.test(words[0] || '')) { brand = 'Central Market Organics'; words.shift(); } }
 
@@ -81,39 +84,264 @@ export function finishItem(p) {
   };
 }
 
-/** Parse plain receipt text (OCR output or pasted digital receipt). */
-export function parseReceiptText(text) {
+// ---------------- Reading receipt lines ----------------
+// Real H-E-B receipt lines look like:
+//   "12 HEB CLBY FNCY SHRD          F   2.98"      line number, name, tax flag, price
+//   "32 SERRANO PEPPER"                             name only, followed by a quantity line:
+//   "   0.32 Lbs @ 1/ 2.48   FW   0.79"             weight @ price per 1 lb, total
+//   "   4 Ea. @ 2/ 1.00      FW   2.00"             count @ price for 2, total
+// Text read from a photo adds noise, so every step below is tolerant of common misreads.
+
+const MONEY = /(\d{1,3})\s?[.,:°'](\d{2})(?!\d|\s?[APap]\.?[Mm]?\b)/g; // 2.98, 2,98, 5°35 (but not times like 6:16P)
+const FLAG = /^(?:[FTNXWHE][FTNXWHSEfo]?|[|!I1l+:;.,©®£¢€*_~-]{1,3}|Fo|Ff|FSF|FN|FH|FE|Ek|EE|F4)$/;
+const ITEMS_END = /^\W{0,3}(sub\s*-?\s*total|total\b|balance\s*due|\*+\s*total)/i;
+// Lines that only appear after the items (payment, footer). If the total line was misread, these still end the list.
+const AFTER_ITEMS = /\b(items\s*purchased|eps\s*amex|visa\s*eps|visa\s*credit|contactless|appr\s*no|ref\s*no|cashier|self\s*checkout|receipt\s*expires|store\s*hours|food-drugs|pharmacy)\b/i;
+
+/** All money amounts in a line, as numbers, in order. */
+function amounts(line) {
+  const out = [];
+  const text = String(line).replace(/([A-Za-z])(?=\d{1,3}[.,]\d{2}\b)/g, '$1 ');
+  for (const m of text.matchAll(MONEY)) out.push(parseFloat(m[1] + '.' + m[2]));
+  // A price printed right after the tax flag sometimes loses its decimal point: "F147" is 1.47.
+  if (!out.length) { const m = text.match(/(?:^|\s)[FT][WHo]?\s?(\d{3,4})\s*\W{0,3}$/); if (m) out.push(parseInt(m[1], 10) / 100); }
+  return out;
+}
+const letterRun = (w) => /[A-Za-z]{3,}/.test(w) || /^(HEB|HCF|CM|MC|SI|FS|SW|SZ|ORG|BR)$/i.test(w);
+
+/** Is this a quantity line ("1.19 lbs @ 1/ 1.68 FW 2.00", "2 Ea. @ 1/ 0.49 FW 0.98")? */
+function qtyLine(line) {
+  const long = (line.match(/[A-Za-z]{4,}/g) || []).filter((w) => !/^(each|lbs?)$/i.test(w));
+  if (long.length) return null;
+  const hasAt = /[@®©«]/.test(line), per = line.match(/(\d)\s*\/\s*\$?(\d{1,3}[.,]\d{1,2})/);
+  const lead = line.match(/^\W*([\dZz][\d.,]*)\s*([A-Za-z.]{0,4})/);
+  const unitWord = lead?.[2] || '';
+  const isWeight = /^(?:[lI1t]?[bh]s?|lbs?)$/i.test(unitWord) || /\blbs?\b/i.test(line);
+  const isCount = /^[EeFf]?a\.?,?$|^ea/i.test(unitWord) && unitWord.length > 0;
+  if (!hasAt && !per && !isWeight && !isCount) return null;
+  const money = amounts(line);
+  const total = money.length ? money[money.length - 1] : null;
+  let qty = null, kind = isWeight ? 'weight' : isCount ? 'count' : null;
+  // The surest quantity is the price math: total / (price per N).
+  if (per && total) {
+    const each = parseFloat(per[2].replace(',', '.')) / Number(per[1]);
+    if (each > 0) qty = total / each;
+  }
+  if (qty == null && lead) {
+    let n = parseFloat(lead[1].replace(/^[Zz]/, '2').replace(',', '.'));
+    if (kind === 'weight' && !/[.,]/.test(lead[1]) && n >= 10) n /= 100; // "0.32" read as "32"
+    if (n > 0) qty = n;
+  }
+  if (qty == null) return null;
+  if (!kind) kind = Math.abs(qty - Math.round(qty)) < 0.05 ? 'count' : 'weight';
+  qty = kind === 'count' ? Math.max(1, Math.round(qty)) : Math.round(qty * 100) / 100;
+  return { kind, qty, total };
+}
+
+/** A line right under a name-only line that has prices but no words is that item's quantity line. */
+function contextQty(line) {
+  if ((line.match(/[A-Za-z]{4,}/g) || []).length) return null;
+  const money = amounts(line);
+  if (!money.length) return null;
+  const total = money[money.length - 1];
+  let qty = 1, kind = 'count';
+  if (money.length >= 2 && money[money.length - 2] > 0) {
+    const r = total / money[money.length - 2];
+    if (Math.abs(r - Math.round(r)) < 0.08) qty = Math.max(1, Math.round(r)); else { qty = Math.round(r * 100) / 100; kind = 'weight'; }
+  }
+  return { kind, qty, total };
+}
+
+/** Clean a name read from a receipt line: drop the line number, junk and tax flags. */
+function cleanName(text) {
+  let words = String(text).replace(/[|]/g, ' ').split(/\s+/).filter(Boolean);
+  while (words.length && !letterRun(words[0])) words.shift();                 // line numbers and junk in front
+  while (words.length && (FLAG.test(words[words.length - 1]) || !/[A-Za-z0-9]/.test(words[words.length - 1]))) words.pop(); // tax flags behind
+  return words.map((w) => w.replace(/^[^A-Za-z0-9&]+|[^A-Za-z0-9%&.']+$/g, '')).filter(Boolean).join(' ');
+}
+
+/** Read the subtotal (or total minus tax) printed after the items, so the review can say if anything is missing. */
+function readSummary(lines, found) {
+  let sub = null, tax = null, total = null;
+  for (const raw of lines.slice(0, 8)) {
+    const line = cleanOcrLine(raw), m = amounts(line);
+    if (!m.length) continue;
+    const v = m[m.length - 1];
+    if (/sub\s*-?\s*total/i.test(line)) sub = v; else if (/\btax\b/i.test(line)) tax = v; else if (/\btotal\b/i.test(line) && total == null) total = v;
+  }
+  found.subtotal = sub ?? (total != null && tax != null ? Math.round((total - tax) * 100) / 100 : total);
+  found.summaryKind = sub != null || (total != null && tax != null) ? 'subtotal' : total != null ? 'total' : null;
+}
+
+/** Turn a list of text lines into receipt items (before name expansion). */
+function readLines(lines) {
   const found = [];
-  let pending = null; // a name-only line waiting for its "2 Ea. @ ..." line
-  const lines = String(text || '').split(/\r?\n/).map(cleanOcrLine).filter(Boolean);
-  for (const line of lines) {
-    if (/^(sub\s*-?total|total\b|balance due|\*+\s*total)/i.test(line)) break; // items end here
-    if (line.includes('@')) {
+  let pending = null; // a name-only line waiting for its quantity line
+  for (const raw of lines) {
+    const line = cleanOcrLine(raw);
+    if (!line) continue;
+    if (ITEMS_END.test(line) || AFTER_ITEMS.test(line)) { readSummary(lines.slice(lines.indexOf(raw)), found); break; }
+    const q = qtyLine(line) || (pending ? contextQty(line) : null);
+    if (q) {
       const target = pending || found[found.length - 1];
       pending = null;
-      if (!target) continue;
-      const w = line.match(/^(\d+(?:\.\d+)?)\s*(?:lbs?|kg)\b/i);
-      const c = line.match(/^(\d+)\s*(?:ea\.?|each|x)?\s*@/i);
-      if (w) target.weight = parseFloat(w[1]);
-      else if (c) target.count = parseInt(c[1], 10);
-      const price = line.match(PRICE_AT_END);
-      if (price && target.price == null) target.price = parseFloat(price[1]);
+      if (!target || target.hasQty) continue;
+      if (q.kind === 'weight') target.weight = q.qty; else target.count = q.qty;
+      if (q.total != null) target.price = q.total;   // the quantity line's total is the item's price
+      target.hasQty = true;
       if (!found.includes(target)) found.push(target);
       continue;
     }
-    pending = null; // a name-only line that was not followed by a quantity line is just a header
+    pending = null;
     if (SKIP_LINE.test(line)) continue;
-    const m = line.match(ITEM_LINE);
-    if (m) { if (parseFloat(m[2]) < 0 || m[3]) continue; found.push({ raw: m[1].trim(), price: parseFloat(m[2]) }); }
-    else if (/[A-Za-z]{3,}/.test(line) && !/\d{3,}/.test(line) && !/[.,]\d{2}\b/.test(line)) pending = { raw: line };
+    const money = amounts(line);
+    if (money.length && (/(?:^|\s)-\$?\d{1,3}[.,]\d{2}|\d[.,]\d{2}-(?:\s|$)/.test(line) || /\b(coupon|savings|discount|promo)\b/i.test(line))) continue; // discounts and coupons
+    const priceAt = money.length ? line.search(/\d{1,3}\s?[.,:°'](\d{2})(?!\d)[^\d]*$/) : -1;
+    const name = cleanName(priceAt > 0 ? line.slice(0, priceAt) : line);
+    if (!name || !/[A-Za-z]{3,}/.test(name)) continue;
+    if (/\d{4,}/.test(name.replace(/\s/g, ''))) continue;                 // card numbers, phone numbers, barcodes
+    const item = { raw: name, price: money.length ? money[money.length - 1] : null };
+    if (item.price == null) { pending = item; found.push(item); } else found.push(item);
   }
-  return found.filter((p) => p.price != null).map((p) => finishItem({ ...p, ...expandName(p.raw) }));
+  return found;
 }
 
-// A price near the end of a line. Phone text readers often add stray marks after it ("2.18 Ek", "11.98 ©"),
-// so up to 4 non-digit characters after the price are ignored.
-const PRICE_AT_END = /(\d{1,4}[.,]\d{2})\s*-?\s*[^\d\s]{0,4}\s*[^\d\s]{0,2}$/;
-const ITEM_LINE = /^(.*?[A-Za-z].*?)\s+\$?(-?\d{1,4}[.,]\d{2})\s*(-)?\s*[^\d\s]{0,4}\s*[^\d\s]{0,2}$/;
+/** How much a parsed item looks like a real product name (0..1). */
+function quality(p) {
+  const words = p.raw.toUpperCase().split(/\s+/).filter((w) => /[A-Z]/.test(w));
+  if (!words.length) return 0;
+  const good = words.filter((w) => ABBR[w] || KNOWN.has(w) || correct(w) !== null).length;
+  return good / words.length;
+}
+
+/** Parse plain receipt text (pasted digital receipt, or text read from a photo). */
+export function parseReceiptText(text) {
+  const found = readLines(String(text || '').split(/\r?\n/));
+  return Object.assign(finishReceipt(found), { subtotal: found.subtotal ?? null, summaryKind: found.summaryKind || null });
+}
+
+/**
+ * Parse several readings of the same receipt (the same photo read with different settings) and combine them.
+ * Each receipt line becomes one group: the readings' versions of a line are matched by name and position,
+ * the price most readings agree on wins, and the clearest name wins. Items bought twice stay separate,
+ * because every reading lists them twice too.
+ */
+export function parseReceiptReadings(readings) {
+  const raw = readings.map((lines) => readLines(lines));
+  const summary = raw.find((r) => r.summaryKind === 'subtotal') || raw.find((r) => r.subtotal != null) || {};
+  const parsed = raw.map((r) => r.filter((p) => p.price != null || p.hasQty));
+  parsed.sort((a, b) => b.length - a.length);
+  const [base = [], ...others] = parsed;
+  const groups = base.map((p, i) => ({ pos: i / Math.max(1, base.length), variants: [p] }));
+  for (const other of others) {
+    const claimed = new Set();
+    other.forEach((p, j) => {
+      const pos = j / Math.max(1, other.length);
+      let best = null, bestScore = 0;
+      for (const g of groups) {
+        if (claimed.has(g)) continue;
+        const overlap = Math.max(...g.variants.map((v) => nameOverlap(v.raw, p.raw)));
+        const samePrice = g.variants.some((v) => v.price != null && v.price === p.price);
+        const near = 1 - Math.min(1, Math.abs(g.pos - pos) * 4);   // lines far apart on the receipt are unlikely twins
+        const score = (overlap >= 0.5 ? overlap : samePrice && overlap > 0 ? 0.4 : 0) * (0.5 + 0.5 * near);
+        if (score > bestScore) { best = g; bestScore = score; }
+      }
+      if (best && bestScore >= 0.3) { best.variants.push(p); claimed.add(best); }
+      else if (p.price != null && quality(p) >= 0.6) { const g = { pos, variants: [p] }; groups.push(g); claimed.add(g); }
+    });
+  }
+  groups.sort((a, b) => a.pos - b.pos);
+  const merged = groups.map(({ variants }) => {
+    // Price: the one most readings agree on; ties go to the reading with the clearest name.
+    const votes = new Map();
+    for (const v of variants) if (v.price != null) votes.set(v.price, (votes.get(v.price) || 0) + 1 + quality(v) / 10);
+    const price = votes.size ? [...votes].sort((a, b) => b[1] - a[1])[0][0] : null;
+    const named = [...variants].sort((a, b) => quality(b) - quality(a) || b.raw.length - a.raw.length)[0];
+    const withQty = variants.find((v) => v.hasQty && v.price === price) || variants.find((v) => v.hasQty);
+    return { ...named, price, weight: withQty?.weight, count: withQty?.count, hasQty: !!withQty, agree: votes.size ? Math.max(...votes.values()) : 0 };
+  });
+  return Object.assign(finishReceipt(merged), { subtotal: summary.subtotal ?? null, summaryKind: summary.summaryKind || null });
+}
+
+function nameOverlap(a, b) {
+  const A = new Set(a.toUpperCase().split(/\W+/).filter((w) => w.length > 2)), B = new Set(b.toUpperCase().split(/\W+/).filter((w) => w.length > 2));
+  if (!A.size || !B.size) return 0;
+  let hit = 0;
+  for (const w of A) if (B.has(w) || [...B].some((x) => editDistance(w, x) <= 1)) hit++;
+  return hit / Math.min(A.size, B.size);
+}
+
+function finishReceipt(found) {
+  return found
+    .filter((p) => (p.price != null || p.hasQty) && quality(p) > 0)
+    .map((p) => {
+      const fixed = p.raw.split(/\s+/).map((w) => (ABBR[w.toUpperCase()] || KNOWN.has(w.toUpperCase()) ? w : correct(w.toUpperCase()) || w)).join(' ');
+      const q = quality({ raw: fixed });
+      const item = finishItem({ ...p, raw: p.raw, ...expandName(fixed) });
+      // Confidence comes from how many words were recognised, so garbled lines get flagged for a check.
+      item.conf = Math.min(item.conf, 0.35 + 0.65 * q - (p.price == null ? 0.2 : 0));
+      return item;
+    });
+}
+
+// ---------------- Fixing misread words ----------------
+// Words that appear on grocery receipts: food names, receipt shorthand and common brands.
+const BRAND_WORDS = `HEB HCF CENTRAL MARKET ORGANICS SELECT INGREDIENTS COKE PEPSI SPRITE FANTA DIET ZERO SUGAR DANNON OIKOS TRIPLE CHOBANI YOPLAIT FAIRLIFE
+  BONNE MAMAN SMUCKERS HATCH OLD PASO MCCORMICK GRILLMATES BARILLA RAOS PREGO RAGU SAPPORO ICHIBAN TONKOTSU MARUCHAN NISSIN ALEXIA ORE IDA BIRDS EYE
+  GREEN GIANT DEL MONTE CAMPBELLS SWANSON PROGRESSO KRAFT VELVEETA TILLAMOOK DAISY BORDEN BLUE BELL BUNNY HELLMANNS HEINZ FRENCHS KIKKOMAN TABASCO
+  CHOLULA VALENTINA HERDEZ PACE TOSTITOS FRITOS DORITOS LAYS RUFFLES CHEETOS SUNCHIPS PRINGLES GOLDFISH RITZ TRISCUIT CHEEZ OREO CHIPS AHOY NABISCO
+  KELLOGGS GENERAL MILLS CHEERIOS QUAKER NATURE VALLEY KIND CLIF SWISS MISS NESTLE HERSHEYS REESES MARS SNICKERS SKITTLES STARBURST SOUR PATCH KIDS
+  HARIBO TROLLI AMOS PEELERZ GUMMY PALMER RUDOLPH PALS CONAIR MICROBAN SHOWER DAVES KILLER BREAD MISSION GUERRERO SARA LEE PEPPERIDGE FARM THOMAS
+  NATURES OWN WONDER COUNTRY CROC SHEDD SPREAD LAND LAKES KERRYGOLD PRETZEL CRISPS SNYDERS PHILADELPHIA SARGENTO BELGIOIOSO BOARS HEAD HILLSHIRE OSCAR
+  MAYER JIMMY DEAN TYSON PERDUE FOSTER FARMS JENNIE BUTTERBALL BANYAN NASOYA HOUSE FOODS BORN FARMS DOLE FRESH EXPRESS TAYLOR EARTHBOUND DRISCOLLS
+  CHIQUITA SUNKIST WONDERFUL HALOS CUTIES MI TIENDA POBLANO MOLE CHATEAU MICHELLE INDIAN WELLS VINEYARD WHITE ROCK CLUB SODA TOPO CHICO LACROIX
+  GATORADE POWERADE ARIZONA SNAPPLE TROPICANA SIMPLY MINUTE MAID OCEAN SPRAY WELCHS JUICY JUICE CAPRI HONEST STARBUCKS FOLGERS COMMUNITY
+  GOURMET CRISPY DILL HOXY KOREAN RAMEN SEASONING SPICY ENCHILADA SAUCE MILD COCOA SCOOP BAKERS PRESERVES ORANGE UNSWEETENED SLICED NATURAL ALMOND
+  ALMONDS WALNUT WALNUTS HALVES PIECES COLBY FANCY SHREDDED HONEY MAPLE HAM JUMBO BLUEBERRIES SALMON FILLET NORWEGIAN MUENSTER PEPPER SAUSAGE THIGHS
+  BONELESS SKINLESS LEAN GROUND TURKEY MEXICAN BLEND CHEESE WATERMELON BAGGED FRENCH BEANS CLOUD TOMATOES SERRANO CILANTRO PREMIUM BANANAS ONION ONIONS
+  BULK BEETS ICEBERG LETTUCE SMALL LEMONS BABY CORN WHOLE BELLA MUSHROOMS BUTTERNUT SQUASH HARD TOFU ROMA AVOCADOS HASS GRAIN SEED BASIL AQUADOME
+  MILK CHOCOLATE HALF SANDWICH TORTILLA TORTILLAS SOUTHWESTERN BELL PEPPERS GARLIC PARMESAN HARVEST CHEDDAR VEGGIE PENNE POTATO BITES SWEET`;
+const KNOWN = new Set();
+const addWords = (text) => String(text).toUpperCase().split(/[^A-Z]+/).forEach((w) => { if (w.length >= 2) KNOWN.add(w); });
+addWords(BRAND_WORDS);
+for (const f of FOODS) addWords([f.key, ...f.aliases].join(' '));
+for (const [k, v] of Object.entries(ABBR)) { KNOWN.add(k); addWords(v); }
+addWords(INGREDIENTS.map((i) => i.name).join(' '));
+const BY_LEN = new Map();
+for (const w of KNOWN) { if (!BY_LEN.has(w.length)) BY_LEN.set(w.length, []); BY_LEN.get(w.length).push(w); }
+
+export function editDistance(a, b, max = 3) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+const fixCache = new Map();
+/** Closest known word to a misread one ("PCTATO" -> "POTATO"), or null when nothing is close enough. */
+function correct(word) {
+  const w = String(word || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/0/g, 'O').replace(/1(?=[A-Z])/g, 'I').replace(/5(?=[A-Z])/g, 'S');
+  if (w.length < 4 || /\d/.test(w)) return null;
+  if (KNOWN.has(w)) return w;
+  if (fixCache.has(w)) return fixCache.get(w);
+  const max = w.length >= 8 ? 2 : 1;
+  let best = null, bestD = max + 1;
+  for (let len = w.length - max; len <= w.length + max; len++) for (const k of BY_LEN.get(len) || []) {
+    const d = editDistance(w, k, max);
+    if (d < bestD || (d === bestD && best && k[0] === w[0] && best[0] !== w[0])) { best = k; bestD = d; }
+  }
+  const out = bestD <= max ? best : null;
+  fixCache.set(w, out);
+  return out;
+}
 
 /** Undo common text-reader mistakes on receipts before parsing a line. */
 export function cleanOcrLine(line) {
@@ -123,7 +351,10 @@ export function cleanOcrLine(line) {
     .replace(/\b0Z\b/g, 'OZ').replace(/(\d)\s?0Z\b/g, '$1 OZ') // "8 0Z" -> "8 OZ"
     .replace(/([A-Z])0(?=[A-Z])/g, '$1O')               // "M0ZZ" -> "MOZZ"
     .replace(/(\d[.,]\d)[/|'](\d)\b/g, '$1$2')          // "5.9/7" -> "5.97"
-    .replace(/(\d),(\d{2})\b/g, '$1.$2');               // "2,18" -> "2.18"
+    .replace(/(\d)\s?°\s?(\d{2})\b/g, '$1.$2')          // "5°35" -> "5.35"
+    .replace(/(\d),(\d{2})\b/g, '$1.$2')                // "2,18" -> "2.18"
+    .replace(/(\d[.,]\d)[\])](?=\s|$)/g, '$17')         // "3.2]" -> "3.27" (a 7 often reads as ] or ))
+    .replace(/(\d[.,]\d)[|lI](?=\s|$)/g, '$11');        // "5.5|" -> "5.51"
 }
 
 /** Combine several review rows into one (adds quantities when the units match). */

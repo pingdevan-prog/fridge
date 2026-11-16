@@ -6,8 +6,12 @@
 //   1. an object finder (COCO-SSD lite) that finds and counts bananas, apples, oranges, broccoli, carrots...
 //   2. a food classifier (MobileNet) run over the whole photo and over overlapping squares of it,
 //      for produce the object finder does not know (lemons, pineapples, peppers, cabbage, squash...).
-import { findFood } from '../lib/match.js';
+//      Only its real food categories count, so "oil filter" or "lotion" can never turn into a food.
+//   3. the label reader, for packaged food: it reads the words on the package and looks for food names
+//      ("virgin coconut oil" -> Coconut oil).
 import { finishItem } from '../lib/receipt.js';
+import { readLabel } from '../lib/ocr.js';
+import { foodsFromLabel } from '../lib/labels.js';
 import { hasAI, aiIdentifyFoods } from '../lib/ai.js';
 import { toDataUrl, openReview } from './fridge.js';
 import { esc, on, openSheet, sheetOf } from './dom.js';
@@ -18,12 +22,19 @@ const loadScript = (src) => new Promise((ok, bad) => {
   const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => bad(new Error('offline')); document.head.appendChild(s);
 });
 
-const CLASS_TO_FOOD = { 'granny smith': 'apple', ear: 'corn', 'head cabbage': 'cabbage', 'french loaf': 'bread', bagel: 'bread', strawberry: 'strawberries', hotdog: 'sausage', 'ice cream': 'ice cream', pizza: 'frozen pizza' };
-const OTHER_FOODS = new Set(['pineapple', 'pomegranate', 'fig', 'artichoke', 'butternut squash', 'acorn squash', 'spaghetti squash', 'pretzel', 'guacamole',
-  'jackfruit', 'custard apple', 'bell pepper', 'cucumber', 'zucchini', 'mushroom', 'lemon', 'orange', 'banana', 'broccoli', 'cauliflower']);
+// The classifier's food categories (first name of each), and what to call them. Anything else it says is ignored.
+const IMAGENET_FOOD = {
+  banana: 'Banana', 'granny smith': 'Apple', orange: 'Orange', lemon: 'Lemon', pineapple: 'Pineapple', strawberry: 'Strawberries',
+  pomegranate: 'Pomegranate', fig: 'Figs', jackfruit: 'Jackfruit', 'custard apple': 'Custard apple', broccoli: 'Broccoli', cauliflower: 'Cauliflower',
+  'head cabbage': 'Cabbage', zucchini: 'Zucchini', cucumber: 'Cucumber', 'bell pepper': 'Bell pepper', artichoke: 'Artichoke', mushroom: 'Mushrooms',
+  'butternut squash': 'Butternut squash', 'acorn squash': 'Acorn squash', 'spaghetti squash': 'Spaghetti squash', corn: 'Corn', ear: 'Corn',
+  'french loaf': 'Bread', bagel: 'Bagels', pretzel: 'Pretzels', pizza: 'Pizza', burrito: 'Burrito', guacamole: 'Guacamole', 'ice cream': 'Ice cream',
+  hotdog: 'Hot dogs', cheeseburger: 'Cheeseburger', 'meat loaf': 'Meatloaf', potpie: 'Pot pie', 'mashed potato': 'Mashed potatoes', 'red wine': 'Red wine',
+  eggnog: 'Eggnog', espresso: 'Coffee', 'chocolate sauce': 'Chocolate syrup', dough: 'Dough', carbonara: 'Pasta carbonara', consomme: 'Soup', 'hot pot': 'Hot pot',
+};
 const COCO_FOOD = { banana: 'Banana', apple: 'Apple', orange: 'Orange', broccoli: 'Broccoli', carrot: 'Carrot', sandwich: 'Sandwich', 'hot dog': 'Hot dog', pizza: 'Pizza', donut: 'Donut', cake: 'Cake' };
-const DETECT_MIN = 0.4;
-const LOOKALIKE = { Zucchini: ['Banana'], Cucumber: ['Banana'], 'Butternut Squash': ['Banana'], 'Acorn Squash': ['Orange', 'Apple'], Fig: ['Apple'], Pomegranate: ['Apple', 'Orange'] };  // object finder: lowest score that counts as a find
+const DETECT_MIN = 0.4;  // object finder: lowest score that counts as a find
+const LOOKALIKE = { Zucchini: ['Banana'], Cucumber: ['Banana'], 'Butternut squash': ['Banana'], 'Spaghetti squash': ['Banana', 'Lemon'], Corn: ['Banana'], 'Acorn squash': ['Orange', 'Apple'], Figs: ['Apple'], Pomegranate: ['Apple', 'Orange'] };
 let models = null;
 
 /** Load the two on-device models once. Falls back to the slower CPU engine if the phone's graphics engine fails. */
@@ -69,14 +80,11 @@ export async function recognizeOnDevice(dataUrl, onStage = () => {}, debug = nul
     g.drawImage(img, x, y, w, h, 0, 0, 224, 224);
     for (const p of await net.classify(crop, 3)) {
       if (p.probability < 0.25) continue;
-      for (const word of p.className.toLowerCase().split(', ')) {
-        const food = CLASS_TO_FOOD[word] ? { key: CLASS_TO_FOOD[word] } : findFood(word);
-        if (!food && !OTHER_FOODS.has(word)) continue;
-        const f = get(title(food ? food.key : word));
-        if (whole) f.whole = Math.max(f.whole, p.probability); else if (p.probability >= 0.35) f.tiles++;
-        f.conf = Math.max(f.conf, p.probability);
-        break;
-      }
+      const name = IMAGENET_FOOD[p.className.toLowerCase().split(', ')[0]];
+      if (!name) continue;
+      const f = get(name);
+      if (whole) f.whole = Math.max(f.whole, p.probability); else if (p.probability >= 0.35) f.tiles++;
+      f.conf = Math.max(f.conf, p.probability);
     }
   };
   await classifyArea([0, 0, W, H], true);
@@ -90,6 +98,14 @@ export async function recognizeOnDevice(dataUrl, onStage = () => {}, debug = nul
   // 4. Drop look-alikes seen only up close when the real food was found (a banana close-up looks like a zucchini).
   for (const [name, f] of keep) if (!f.counted && f.whole < 0.3 && (LOOKALIKE[name] || []).some((other) => keep.get(other)?.counted)) keep.delete(name);
   return [...keep].map(([name, f]) => ({ name, count: f.counted ? f.count : 1, conf: f.conf })).sort((a, b) => b.conf - a.conf);
+}
+
+/** Food names read from a package label in the photo. Returns [{ name, conf }]. */
+export async function labelFoods(src, onStage = () => {}) {
+  onStage('Reading the label…');
+  try {
+    return foodsFromLabel(await readLabel(src)).map((r) => ({ name: r.name.charAt(0).toUpperCase() + r.name.slice(1), conf: r.score >= 2.5 ? 0.9 : 0.6 }));
+  } catch { return []; } // no label reader (offline): the image models' answer still stands
 }
 
 on('food-photo', async (el) => {
@@ -116,8 +132,11 @@ on('food-photo', async (el) => {
         found = (await aiIdentifyFoods(dataUrl)).filter((f) => f && f.name)
           .map((f) => ({ name: String(f.name), brand: f.brand || '', qty: Number(f.qty) || 1, unit: f.unit || 'each', category: f.category, conf: Number(f.confidence) || 0.5 }));
       } else {
-        found = (await recognizeOnDevice(dataUrl, (s) => stage(files.length > 1 && s.startsWith('Looking') ? `Looking for food in photo ${n + 1} of ${files.length}…` : s)))
-          .map((f) => ({ name: f.name, qty: f.count, unit: 'each', conf: f.conf >= 0.6 ? 0.9 : 0.5 }));
+        const say = (s) => stage(files.length > 1 ? `Photo ${n + 1} of ${files.length}: ${s.charAt(0).toLowerCase() + s.slice(1)}` : s);
+        const seen = (await recognizeOnDevice(dataUrl, say)).map((f) => ({ name: f.name, qty: f.count, unit: 'each', conf: f.conf >= 0.6 ? 0.9 : 0.5 }));
+        const label = (await labelFoods(file, say)).map((f) => ({ name: f.name, qty: 1, unit: 'each', conf: f.conf }));
+        // A label beats a guess from the picture: drop picture guesses that the label already names ("Coconut" vs "Coconut oil").
+        found = [...label, ...seen.filter((f) => !label.some((l) => l.name.toLowerCase().includes(f.name.toLowerCase().replace(/s$/, ''))))];
       }
       for (const f of found) { const k = f.name.toLowerCase(); const m = merged.get(k); if (m && m.unit === f.unit) m.qty += f.qty; else if (!m) merged.set(k, f); }
     }
@@ -126,7 +145,7 @@ on('food-photo', async (el) => {
       : `Found ${items.length} ${items.length === 1 ? 'food' : 'foods'}. Check the names and counts, and add anything it missed.`;
     if (!items.length) {
       items = [finishItem({ raw: '', name: '', qty: 1, unit: 'each', conf: 0 })];
-      source = hasAI() ? 'No food was found in that photo. Type what it is below.' : 'No food was recognized. This phone knows fresh fruit and vegetables best. Type what it is below.';
+      source = hasAI() ? 'No food was found in that photo. Type what it is below.' : 'No food was recognized. Try a closer photo with the label facing the camera, or type what it is below.';
     }
     sheet.close();
     openReview(items, source, files.length === 1 ? firstPhoto : null);

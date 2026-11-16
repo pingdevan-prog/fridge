@@ -30,11 +30,16 @@ export const ABBR = {
   SHMP: 'Shampoo', COND: 'Conditioner', TTHPST: 'Toothpaste', BATT: 'Batteries', CLNR: 'Cleaner', SPNG: 'Sponges', WPS: 'Wipes',
   ICECRM: 'Ice Cream', PZA: 'Pizza', NUGG: 'Nuggets', WFL: 'Waffles', BRKFST: 'Breakfast', TACO: 'Taco', SEAS: 'Seasoning',
   CHNKY: 'Chunky', SMTH: 'Smooth', CRNCHY: 'Crunchy', ROMA: 'Roma', HASS: 'Hass', BABY: 'Baby', PNR: 'Paneer', PPRS: 'Peppers',
+  TRPLE: 'Triple', ZR: 'Zero', ORANG: 'Orange', PRESERV: 'Preserves', VYD: 'Vineyard', SELC: 'Select', UNSWEET: 'Unsweetened', CLBY: 'Colby',
+  FNCY: 'Fancy', NOR: 'Norwegian', ABF: 'Antibiotic Free', TURKE: 'Turkey', CHEES: 'Cheese', WATERM: 'Watermelon', MSHROOMS: 'Mushrooms',
+  MSHRMS: 'Mushrooms', SSN: 'Seasoning', HT: 'Hot', SPCY: 'Spicy', RMN: 'Ramen', KRN: 'Korean', SNG: 'Seasoning', VEG: 'Veggie', CSM: 'Chateau Ste. Michelle',
+  OEP: 'Old El Paso', MC: 'McCormick', DKB: "Dave's Killer Bread", DANN: 'Dannon', SW: 'Sweet', PAR: 'Parmesan', SA: 'Sausage', BR: 'Bread',
+  FS: 'Fresh Sliced', AQUADOME: 'Aquadome', CLOUD9: 'Cloud 9', BNLS: 'Boneless', SZ: 'Seasoned', NAT: 'Natural', SCE: 'Sauce', MCF: 'Chocolate',
 };
 // Paper "PPR" means pepper for food but paper for towels; resolved in receipt.js by the next word.
 
 /** Words that mark a non-food line (goes to the Household list, not the fridge). */
-export const NONFOOD = /\b(paper|towels?|toilet|tissue|napkins?|detergent|softener|bleach|soap|shampoo|conditioner|toothpaste|toothbrush|deodorant|lotion|razor|diapers?|wipes|trash|foil|plastic wrap|zip|ziploc|storage bags?|plates|cups|cutlery|batteries|cleaner|sponges?|lysol|clorox|windex|bounty|charmin|tide|dawn|cat|dog|pet|litter|charcoal|candles?|light bulbs?|magazine|gift card|flowers|bouquet|vitamins?|tylenol|advil|bandages?)\b/i;
+export const NONFOOD = /\b(shower|conair|microban|paper|towels?|toilet|tissue|napkins?|detergent|softener|bleach|soap|shampoo|conditioner|toothpaste|toothbrush|deodorant|lotion|razor|diapers?|wipes|trash|foil|plastic wrap|zip|ziploc|storage bags?|plates|cups|cutlery|batteries|cleaner|sponges?|lysol|clorox|windex|bounty|charmin|tide|dawn|cat|dog|pet|litter|charcoal|candles?|light bulbs?|magazine|gift card|flowers|bouquet|vitamins?|tylenol|advil|bandages?)\b/i;
 
 /** Lines on a receipt that are never items. */
 export const SKIP_LINE = /\b(sub\s*total|subtotal|total|tax|debit|credit|visa|mastercard|amex|discover|change due|change|cash|balance|coupon|savings|you saved|bag fee|items sold|item count|card #|auth|approval|ref #|reference|thank you|cashier|store #|tel |www\.|\.com|ebt|tender|discount|points|receipt|survey|return policy|trans(action)?|terminal|aid:|chip|pin verified|curbside|order #)\b/i;

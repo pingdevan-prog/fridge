@@ -5,7 +5,8 @@ import { findFood } from '../lib/match.js';
 import { ingredientCategory } from '../data/ingredients.js';
 import { UNITS, fmtAmount } from '../lib/units.js';
 import { itemNutrition, eatNutrition, usdaSearch } from '../lib/nutrition.js';
-import { parseReceiptText, finishItem, splitBrand, mergeItems } from '../lib/receipt.js';
+import { parseReceiptText, parseReceiptReadings, finishItem, splitBrand, mergeItems } from '../lib/receipt.js';
+import { readReceiptPhoto } from '../lib/ocr.js';
 import { hasAI, aiParseReceipt, aiIdentifyFoods } from '../lib/ai.js';
 import { checkOffFromReceipt } from '../lib/shopping.js';
 import { ic, catBadge, avatar } from './icons.js';
@@ -247,34 +248,6 @@ export async function toDataUrl(file, max = 1800) {
     return c.toDataURL('image/jpeg', 0.86);
   } finally { URL.revokeObjectURL(url); }
 }
-/** On-device OCR (Tesseract.js, loaded only when needed). */
-async function ocr(dataUrl, onProgress) {
-  if (!window.Tesseract) await new Promise((ok, bad) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'; s.onload = ok; s.onerror = () => bad(new Error('Could not load the text reader. Check your internet connection.')); document.head.appendChild(s); });
-  const res = await window.Tesseract.recognize(await forOcr(dataUrl), 'eng', { logger: (m) => { if (m.status === 'recognizing text') onProgress(Math.round(m.progress * 100)); } });
-  return res.data.text;
-}
-/** Grayscale and stretch the contrast so faded thermal-paper print reads better. */
-async function forOcr(dataUrl) {
-  const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = dataUrl; });
-  const c = document.createElement('canvas');
-  c.width = img.width; c.height = img.height;
-  const g = c.getContext('2d');
-  g.drawImage(img, 0, 0);
-  const d = g.getImageData(0, 0, c.width, c.height), px = d.data;
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < px.length; i += 4) { const v = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000 | 0; px[i] = v; hist[v]++; }
-  // Ignore the darkest and lightest 2% when stretching, so shadows and glare do not decide the range.
-  const n = px.length / 4;
-  let lo = 0, hi = 255, acc = 0;
-  while (lo < 255 && (acc += hist[lo]) < n * 0.02) lo++;
-  acc = 0;
-  while (hi > 0 && (acc += hist[hi]) < n * 0.02) hi--;
-  const span = Math.max(1, hi - lo);
-  for (let i = 0; i < px.length; i += 4) { const v = Math.max(0, Math.min(255, ((px[i] - lo) * 255) / span)); px[i] = px[i + 1] = px[i + 2] = v; }
-  g.putImageData(d, 0, 0);
-  return c.toDataURL('image/jpeg', 0.92);
-}
-
 on('scan-file', async (el) => {
   const file = el.files?.[0];
   if (!file) return;
@@ -293,12 +266,11 @@ on('scan-file', async (el) => {
       items = raw.map((r) => finishItem({ raw: r.raw, name: String(r.name || r.raw || 'Item'), brand: r.brand || '', qty: Number(r.qty) || 1, unit: r.unit || 'each',
         price: r.price == null ? null : Number(r.price), category: r.category, isFood: r.isFood !== false, conf: Number(r.confidence) || 0.5 }));
     } else {
-      const text = await ocr(dataUrl, (p) => set(`Reading the text on this device: ${p}%`));
-      items = parseReceiptText(text);
+      items = parseReceiptReadings(await readReceiptPhoto(file, (p) => set(`Reading every line on this phone: ${p}%. Long receipts take up to a minute.`)));
     }
     if (!items.length) throw new Error('No items were found. Make sure the whole receipt is in the photo and the print is sharp, or paste the receipt text instead.');
     sheet.close();
-    openReview(items, hasAI() ? 'Read by Claude' : 'Read on this device');
+    openReview(items, hasAI() ? 'Read by Claude' : 'Read on this phone', null, { subtotal: items.subtotal ?? null, summaryKind: items.summaryKind });
   } catch (e) { error = e.message || 'Something went wrong while reading the receipt.'; sheet.refresh(); }
 });
 on('scan-open-again', (el) => openScan(el));
@@ -336,13 +308,25 @@ function reviewRow(it, selected) {
   </div>`;
 }
 
-export function openReview(items, source, photo = null) {
-  review = { items, selected: new Set(), source: String(source).replace(/\.$/, ''), photo };
+/** Compare what was read with the receipt's own subtotal, so missed items are obvious. */
+function totalCheck() {
+  if (review.subtotal == null) return '';
+  const sum = review.items.reduce((t, i) => t + (Number(i.price) || 0), 0), gap = Math.round((review.subtotal - sum) * 100) / 100;
+  const withTax = review.summaryKind === 'total';
+  // A total includes tax (about 8.25% on taxable items in Austin), so allow for it before warning.
+  if (withTax && gap >= -0.05 && gap <= review.subtotal * 0.0825 + 0.05) return `<p class="note" style="background:var(--green-soft);color:var(--green-dark);margin-top:10px">${ic('check')} The prices add up to ${money(sum)}, which matches the receipt total of ${money(review.subtotal)} once tax is included.</p>`;
+  if (Math.abs(gap) < 0.05) return `<p class="note" style="background:var(--green-soft);color:var(--green-dark);margin-top:10px">${ic('check')} Every item was found: the prices add up to the receipt's ${money(review.subtotal)}.</p>`;
+  return `<p class="note" style="margin-top:10px">The prices add up to ${money(sum)}, but the receipt ${withTax ? 'total (with tax) is' : 'subtotal is'} ${money(review.subtotal)}. ${gap > 0 ? `About ${money(gap)} of items may have been missed or misread. Check the receipt and use “Add a missed item” below.` : 'Some prices may have been misread. Check the ones that look off.'}</p>`;
+}
+
+export function openReview(items, source, photo = null, opts = {}) {
+  review = { items, selected: new Set(), source: String(source).replace(/\.$/, ''), photo, subtotal: opts.subtotal ?? null, summaryKind: opts.summaryKind || 'subtotal' };
   openSheet(() => {
     const flagged = review.items.filter((i) => i.conf < 0.7).length, food = review.items.filter((i) => i.isFood).length;
     return `<h2>Review ${review.items.length} ${review.items.length === 1 ? 'item' : 'items'}</h2>
     ${review.photo ? `<img class="review-photo" src="${review.photo}" alt="Your photo">` : ''}
     <p class="sub">${esc(review.source)}. Fix anything that looks off before it goes in your fridge.${flagged ? ` <b>${flagged} ${flagged === 1 ? 'needs' : 'need'} a quick look.</b>` : ''}</p>
+    ${totalCheck()}
     <div class="stack tight" style="margin-top:12px">${review.items.map((it) => reviewRow(it, review.selected.has(it.id))).join('') || '<p class="muted center">Everything was removed.</p>'}</div>
     <button class="btn ghost block" style="margin-top:10px" data-act="rv-add">${ic('plus')}Add a missed item</button>
     <div class="sticky-bar"><button class="btn ghost" data-act="rv-merge" ${review.selected.size < 2 ? 'disabled' : ''}>Merge ${review.selected.size > 1 ? review.selected.size : ''}</button>
