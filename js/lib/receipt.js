@@ -71,7 +71,8 @@ export function finishItem(p) {
   if (food && guess && !sameKind(food.cat, guess)) food = null; // "Serrano pepper" is not black pepper
   const category = nonFood ? 'household' : (guess || food?.cat || (CATEGORIES[p.category] && p.category !== 'other' ? p.category : 'other'));
   const frozen = /\bfrozen\b/i.test(p.name);
-  const location = nonFood ? null : frozen ? 'freezer' : (food?.loc || CAT_DEFAULTS[category]?.[0] || 'pantry');
+  // Sauces and condiments live in the fridge once opened, even when the food table files them as staples.
+  const location = nonFood ? null : frozen ? 'freezer' : ((category === 'sauces' ? null : food?.loc) || CAT_DEFAULTS[category]?.[0] || 'pantry');
   let qty = p.qty, unit = p.unit ? normUnit(p.unit) : null;
   if (qty == null) {
     const buy = food?.buy?.[0];

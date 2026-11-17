@@ -71,14 +71,16 @@ function paperBrightness(gray, W, H) {
 }
 
 /** Flattened, ink-only black-and-white versions of a photo, one per threshold. */
-export async function cleanPhoto(src, { maxSide = 3000, thresholds = [150, 120], invert = false, both = 0 } = {}) {
+export async function cleanPhoto(src, { maxSide = 3000, thresholds = [150, 120], invert = false, both = 0, turn = 0 } = {}) {
   const img = await loadImage(src);
   const k = Math.min(maxSide / Math.max(img.width, img.height), 2);
-  const W = Math.round(img.width * k), H = Math.round(img.height * k);
+  const w = Math.round(img.width * k), h = Math.round(img.height * k), side = turn === 90 || turn === 270;
+  const W = side ? h : w, H = side ? w : h;
   const base = document.createElement('canvas'); base.width = W; base.height = H;
   const g = base.getContext('2d', { willReadFrequently: true });
   g.imageSmoothingQuality = 'high';
-  g.drawImage(img, 0, 0, W, H);
+  // turn: rotate the photo (degrees clockwise) so sideways label text reads left to right.
+  g.translate(W / 2, H / 2); g.rotate((turn * Math.PI) / 180); g.drawImage(img, -w / 2, -h / 2, w, h); g.setTransform(1, 0, 0, 1, 0, 0);
   const px = g.getImageData(0, 0, W, H).data;
   base.width = base.height = 0; // free the memory right away (iPhones have a small canvas memory budget)
   const gray = new Uint8ClampedArray(W * H);
@@ -136,7 +138,7 @@ export async function readReceiptPhoto(file, onProgress = () => {}) {
 
 /**
  * Read the words on a product label. Labels mix dark text and light text on colored backgrounds, so the photo is
- * read four ways. Returns one list of { text, h } per reading (h = letter height in pixels, bigger = more prominent).
+ * read four ways (including turned sideways). Returns one list of { text, h } per reading (h = letter height in pixels, bigger = more prominent).
  */
 export async function readLabel(src) {
   await loadReader();
@@ -145,7 +147,8 @@ export async function readLabel(src) {
     await worker.setParameters({ tessedit_pageseg_mode: '11' }); // sparse text: labels are not neat paragraphs
     const readings = [];
     // Several sizes, because the reader works best when letters are a certain size and we do not know how big the label is.
-    for (const opts of [{ maxSide: 1200, both: 35 }, { maxSide: 1600, both: 35 }, { maxSide: 2400, both: 35 }, { maxSide: 1600, thresholds: [170] }]) {
+    // Label text is often sideways (a bottle lying down, a clamshell sticker), so it is also read turned both ways.
+    for (const opts of [{ maxSide: 1600, both: 35 }, { maxSide: 1600, both: 35, turn: 90 }, { maxSide: 1600, both: 35, turn: 270 }, { maxSide: 2400, both: 35 }]) {
       const [page] = await cleanPhoto(src, opts);
       const { data } = await worker.recognize(page);
       const words = [];

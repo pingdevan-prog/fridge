@@ -2,102 +2,69 @@
 // goes to the review screen, so nothing goes in the fridge unchecked.
 //
 // With a Claude key, Claude reads the photo (recognizes packaged foods and reads labels).
-// Without one, two small image models run on the phone itself:
-//   1. an object finder (COCO-SSD lite) that finds and counts bananas, apples, oranges, broccoli, carrots...
-//   2. a food classifier (MobileNet) run over the whole photo and over overlapping squares of it,
-//      for produce the object finder does not know (lemons, pineapples, peppers, cabbage, squash...).
-//      Only its real food categories count, so "oil filter" or "lotion" can never turn into a food.
-//   3. the label reader, for packaged food: it reads the words on the package and looks for food names
-//      ("virgin coconut oil" -> Coconut oil).
+// Without one, everything runs free on the phone:
+//   1. MobileCLIP (js/lib/vision.js) compares the photo with every food in the ingredient list.
+//      One food in the photo: its best match. A drawer or shelf: the photo is also looked at in squares,
+//      and foods that show up clearly (or in more than one square) are kept.
+//   2. The label reader reads the words on a package (also sideways) and looks for food names
+//      ("CREAM CHEESE" -> Cream cheese). A label name the picture also considered wins, because it is exact.
+//   Unsure answers come with the next best guesses, shown as one-tap choices on the review screen.
 import { finishItem } from '../lib/receipt.js';
 import { readLabel } from '../lib/ocr.js';
 import { foodsFromLabel } from '../lib/labels.js';
+import { loadVision, describe, rankFoods } from '../lib/vision.js';
 import { hasAI, aiIdentifyFoods } from '../lib/ai.js';
 import { toDataUrl, openReview } from './fridge.js';
 import { esc, on, openSheet, sheetOf } from './dom.js';
 
-const title = (s) => String(s).replace(/\b\w/g, (c) => c.toUpperCase());
-const loadScript = (src) => new Promise((ok, bad) => {
-  if ([...document.scripts].some((s) => s.src === src)) return ok();
-  const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => bad(new Error('offline')); document.head.appendChild(s);
-});
-
-// The classifier's food categories (first name of each), and what to call them. Anything else it says is ignored.
-const IMAGENET_FOOD = {
-  banana: 'Banana', 'granny smith': 'Apple', orange: 'Orange', lemon: 'Lemon', pineapple: 'Pineapple', strawberry: 'Strawberries',
-  pomegranate: 'Pomegranate', fig: 'Figs', jackfruit: 'Jackfruit', 'custard apple': 'Custard apple', broccoli: 'Broccoli', cauliflower: 'Cauliflower',
-  'head cabbage': 'Cabbage', zucchini: 'Zucchini', cucumber: 'Cucumber', 'bell pepper': 'Bell pepper', artichoke: 'Artichoke', mushroom: 'Mushrooms',
-  'butternut squash': 'Butternut squash', 'acorn squash': 'Acorn squash', 'spaghetti squash': 'Spaghetti squash', corn: 'Corn', ear: 'Corn',
-  'french loaf': 'Bread', bagel: 'Bagels', pretzel: 'Pretzels', pizza: 'Pizza', burrito: 'Burrito', guacamole: 'Guacamole', 'ice cream': 'Ice cream',
-  hotdog: 'Hot dogs', cheeseburger: 'Cheeseburger', 'meat loaf': 'Meatloaf', potpie: 'Pot pie', 'mashed potato': 'Mashed potatoes', 'red wine': 'Red wine',
-  eggnog: 'Eggnog', espresso: 'Coffee', 'chocolate sauce': 'Chocolate syrup', dough: 'Dough', carbonara: 'Pasta carbonara', consomme: 'Soup', 'hot pot': 'Hot pot',
-};
-const COCO_FOOD = { banana: 'Banana', apple: 'Apple', orange: 'Orange', broccoli: 'Broccoli', carrot: 'Carrot', sandwich: 'Sandwich', 'hot dog': 'Hot dog', pizza: 'Pizza', donut: 'Donut', cake: 'Cake' };
-const DETECT_MIN = 0.4;  // object finder: lowest score that counts as a find
-const LOOKALIKE = { Zucchini: ['Banana'], Cucumber: ['Banana'], 'Butternut squash': ['Banana'], 'Spaghetti squash': ['Banana', 'Lemon'], Corn: ['Banana'], 'Acorn squash': ['Orange', 'Apple'], Figs: ['Apple'], Pomegranate: ['Apple', 'Orange'] };
-let models = null;
-
-/** Load the two on-device models once. Falls back to the slower CPU engine if the phone's graphics engine fails. */
-function loadModels(onStage = () => {}) {
-  if (!models) models = (async () => {
-    onStage('Downloading the food recognizer (one time only, about 20 MB)…');
-    if (!window.tf) await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
-    await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');
-    await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js');
-    try { if (!(await window.tf.setBackend('webgl'))) throw new Error('no webgl'); } catch { await window.tf.setBackend('cpu'); }
-    await window.tf.ready();
-    // One at a time keeps peak memory low on phones.
-    const det = await window.cocoSsd.load({ base: 'lite_mobilenet_v2' });
-    const net = await window.mobilenet.load({ version: 2, alpha: 1.0 });
-    return { det, net };
-  })().catch((e) => { models = null; throw e; });
-  return models;
-}
-
+const cap = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1);
 const loadImage = (src) => new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('That photo could not be opened. Try taking it again.')); i.src = src; });
+const SINGLE = 0.3;  // the whole photo matches one food this well: a close-up of one item (a drawer spreads its matches thin)
+const TILE = 0.6;    // one square on its own needs to match this well to count
+const TILE2 = 0.2;   // ...or two squares agreeing at this level
 
-/** Find every food in a photo. Returns [{ name, count, conf }]. */
+/**
+ * Find every food in a photo. Returns { found: [{ name, conf, alts }], single, top }.
+ * single: the photo shows one item (worth reading its label). top: the whole-photo guesses.
+ */
 export async function recognizeOnDevice(dataUrl, onStage = () => {}, debug = null) {
-  const { det, net } = await loadModels(onStage);
+  onStage('Getting the food recognizer ready…');
+  const v = await loadVision((pct) => onStage(`Downloading the food recognizer (one time only): ${pct}%`));
   onStage('Looking for food…');
   const img = await loadImage(dataUrl);
-  const found = new Map(); // name -> { count, conf, counted, tiles }
-  const get = (name) => found.get(name) || found.set(name, { count: 0, conf: 0, counted: false, det: 0, tiles: 0, whole: 0 }).get(name);
-
-  // 1. Find and count objects.
-  let hits;
-  try { hits = await det.detect(img, 40, DETECT_MIN); }
-  catch { await window.tf.setBackend('cpu'); hits = await det.detect(img, 40, DETECT_MIN); }
-  for (const p of hits) if (COCO_FOOD[p.class]) { const f = get(COCO_FOOD[p.class]); f.count++; f.counted = true; f.det = Math.max(f.det, p.score); f.conf = Math.max(f.conf, p.score); }
-
-  // 2. Classify the whole photo and overlapping squares.
-  const crop = document.createElement('canvas'); crop.width = crop.height = 224;
-  const g = crop.getContext('2d'), W = img.width, H = img.height, N = 3, tw = W / N, th = H / N;
-  const tiles = [];
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) tiles.push([x * tw, y * th, tw, th]);
-  for (let y = 0; y < N - 1; y++) for (let x = 0; x < N - 1; x++) tiles.push([x * tw + tw / 2, y * th + th / 2, tw, th]);
-  const classifyArea = async ([x, y, w, h], whole) => {
-    g.drawImage(img, x, y, w, h, 0, 0, 224, 224);
-    for (const p of await net.classify(crop, 3)) {
-      if (p.probability < 0.25) continue;
-      const name = IMAGENET_FOOD[p.className.toLowerCase().split(', ')[0]];
-      if (!name) continue;
-      const f = get(name);
-      if (whole) f.whole = Math.max(f.whole, p.probability); else if (p.probability >= 0.35) f.tiles++;
-      f.conf = Math.max(f.conf, p.probability);
-    }
+  const canvas = document.createElement('canvas'), g = canvas.getContext('2d');
+  const look = async (x, y, w, h) => {
+    const k = Math.min(1, 512 / Math.max(w, h));
+    canvas.width = Math.round(w * k); canvas.height = Math.round(h * k);
+    g.drawImage(img, x, y, w, h, 0, 0, canvas.width, canvas.height);
+    return rankFoods(await describe(v, canvas), v.bank, 6);
   };
-  await classifyArea([0, 0, W, H], true);
-  for (const t of tiles) await classifyArea(t, false);
+  const W = img.width, H = img.height;
+  const top = await look(0, 0, W, H);
+  if (debug) debug.whole = top.map((r) => `${r.name} ${(r.p * 100).toFixed(0)}`);
+  const alts = (list, name) => list.filter((r) => r.name !== name && r.p >= 0.03).slice(0, 3).map((r) => cap(r.name));
+  if (top[0].p >= SINGLE) return { found: [{ name: cap(top[0].name), conf: top[0].p, alts: top[0].p < 0.8 ? alts(top, top[0].name) : [] }], single: true, top };
 
-  if (debug) debug.found = Object.fromEntries([...found].map(([k, f]) => [k, { ...f, conf: +f.conf.toFixed(2), whole: +f.whole.toFixed(2) }]));
-  // 3. Keep a food when the object finder counted it, the whole-photo look saw it, or several squares agree.
-  //    A food seen in just one square needs to be a strong match (close-ups of one food often look like another).
-  //    A weak object find needs a second opinion from the classifier.
-  const keep = new Map([...found].filter(([, f]) => (f.counted && (f.det >= 0.5 || f.tiles >= 1 || f.whole >= 0.3)) || f.whole >= 0.3 || f.tiles >= 2 || (f.tiles === 1 && f.conf >= 0.75)));
-  // 4. Drop look-alikes seen only up close when the real food was found (a banana close-up looks like a zucchini).
-  for (const [name, f] of keep) if (!f.counted && f.whole < 0.3 && (LOOKALIKE[name] || []).some((other) => keep.get(other)?.counted)) keep.delete(name);
-  return [...keep].map(([name, f]) => ({ name, count: f.counted ? f.count : 1, conf: f.conf })).sort((a, b) => b.conf - a.conf);
+  // Several foods (or an unclear photo): look at it in squares too.
+  const seen = new Map(); // name -> { best, hits }
+  for (const N of [3, 4]) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    onStage(`Looking for food… ${Math.round(((N === 3 ? 0 : 9) + y * N + x + 1) / 25 * 100)}%`);
+    const [r] = await look((x * W) / N, (y * H) / N, W / N, H / N);
+    const s = seen.get(r.name) || { best: 0, hits: 0 };
+    s.best = Math.max(s.best, r.p); if (r.p >= TILE2) s.hits++;
+    seen.set(r.name, s);
+  }
+  if (debug) debug.squares = Object.fromEntries([...seen].map(([k, s]) => [k, `${(s.best * 100).toFixed(0)} x${s.hits}`]));
+  const found = [...seen].filter(([, s]) => s.best >= TILE || s.hits >= 2).map(([name, s]) => ({ name: cap(name), conf: s.best, alts: [] }));
+  // The whole-photo guess counts when it stands out from the rest, even if no single square was sure.
+  const clear = top[0].p >= 0.15 && top[0].p >= 1.8 * top[1].p;
+  if (clear && !found.some((f) => f.name.toLowerCase() === top[0].name)) found.push({ name: cap(top[0].name), conf: top[0].p, alts: alts(top, top[0].name) });
+  found.sort((a, b) => b.conf - a.conf);
+  // One food (or none) found: probably one item after all. Offer the whole-photo guesses as other choices,
+  // and never come back empty-handed: the best guess is filled in, marked for a check.
+  if (found.length === 1 && !found[0].alts.length) found[0].alts = alts(top, found[0].name.toLowerCase());
+  if (!found.length && top[0].p >= 0.08) found.push({ name: cap(top[0].name), conf: Math.min(top[0].p, 0.3), alts: alts(top, top[0].name) });
+  return { found, single: found.length <= 1, top };
 }
 
 /** Food names read from a package label in the photo. Returns [{ name, conf }]. */
@@ -121,7 +88,7 @@ on('food-photo', async (el) => {
     : `<div class="loading"><div class="spin"></div><h2>Looking at your ${files.length > 1 ? files.length + ' photos' : 'photo'}</h2><p class="muted">${esc(status)}</p></div>`));
   const stage = (s) => { status = s; sheet.refresh(); };
   try {
-    const merged = new Map();
+    const merged = new Map(), guesses = [];
     let firstPhoto = null;
     for (const [n, file] of files.entries()) {
       const dataUrl = await toDataUrl(file, hasAI() ? 1500 : 1024);
@@ -133,19 +100,28 @@ on('food-photo', async (el) => {
           .map((f) => ({ name: String(f.name), brand: f.brand || '', qty: Number(f.qty) || 1, unit: f.unit || 'each', category: f.category, conf: Number(f.confidence) || 0.5 }));
       } else {
         const say = (s) => stage(files.length > 1 ? `Photo ${n + 1} of ${files.length}: ${s.charAt(0).toLowerCase() + s.slice(1)}` : s);
-        const seen = (await recognizeOnDevice(dataUrl, say)).map((f) => ({ name: f.name, qty: f.count, unit: 'each', conf: f.conf >= 0.6 ? 0.9 : 0.5 }));
-        const label = (await labelFoods(file, say)).map((f) => ({ name: f.name, qty: 1, unit: 'each', conf: f.conf }));
-        // A label beats a guess from the picture: drop picture guesses that the label already names ("Coconut" vs "Coconut oil").
-        found = [...label, ...seen.filter((f) => !label.some((l) => l.name.toLowerCase().includes(f.name.toLowerCase().replace(/s$/, ''))))];
+        const pic = await recognizeOnDevice(dataUrl, say);
+        guesses.push(...pic.top.filter((t) => t.p >= 0.03).map((t) => cap(t.name)));
+        found = pic.found.map((f) => ({ name: f.name, qty: 1, unit: 'each', conf: f.conf >= 0.5 ? 0.9 : 0.5, alts: f.alts }));
+        // One item in the photo: read its label too. A label name the picture also had in mind is exact, so it wins
+        // ("cream cheese" over "heavy cream"); so does any label name when the picture had no idea.
+        if (pic.single && !(pic.top[0].p >= 0.85)) {
+          const label = await labelFoods(file, say);
+          const named = label.find((l) => pic.top.some((t) => t.name === l.name.toLowerCase())) || (pic.top[0].p < 0.15 ? label[0] : null);
+          if (named) {
+            const others = [...new Set([...(found[0] ? [found[0].name] : []), ...pic.top.map((t) => cap(t.name))])].filter((x) => x.toLowerCase() !== named.name.toLowerCase()).slice(0, 3);
+            found = [{ name: named.name, qty: 1, unit: 'each', conf: 0.9, alts: others }];
+          }
+        }
       }
       for (const f of found) { const k = f.name.toLowerCase(); const m = merged.get(k); if (m && m.unit === f.unit) m.qty += f.qty; else if (!m) merged.set(k, f); }
     }
-    let items = [...merged.values()].map((f) => finishItem({ raw: '', ...f }));
+    let items = [...merged.values()].map((f) => Object.assign(finishItem({ raw: '', ...f }), { alts: f.alts || null }));
     let source = hasAI() ? `Claude found ${items.length} ${items.length === 1 ? 'food' : 'foods'}. Remove anything wrong and add anything it missed.`
       : `Found ${items.length} ${items.length === 1 ? 'food' : 'foods'}. Check the names and counts, and add anything it missed.`;
     if (!items.length) {
-      items = [finishItem({ raw: '', name: '', qty: 1, unit: 'each', conf: 0 })];
-      source = hasAI() ? 'No food was found in that photo. Type what it is below.' : 'No food was recognized. Try a closer photo with the label facing the camera, or type what it is below.';
+      items = [Object.assign(finishItem({ raw: '', name: '', qty: 1, unit: 'each', conf: 0 }), { alts: [...new Set(guesses)].slice(0, 4) })];
+      source = hasAI() ? 'No food was found in that photo. Type what it is below.' : 'No food was recognized. Try a closer photo with the food filling most of the picture, or type what it is below.';
     }
     sheet.close();
     openReview(items, source, files.length === 1 ? firstPhoto : null);

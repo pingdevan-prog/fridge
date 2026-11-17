@@ -348,6 +348,7 @@ function reviewRow(it, selected) {
       <input class="input" type="number" inputmode="decimal" min="0" step="0.01" value="${it.price ?? ''}" placeholder="Price $" data-change="rv-edit" data-f="price" aria-label="Price">
       <select class="input" data-change="rv-edit" data-f="where" aria-label="Where it goes">${options([...Object.entries(LOCATIONS), ['household', 'Household (not food)']], where)}</select>
     </div>
+    ${it.alts?.length ? `<div class="alts"><span class="muted small">Or is it</span>${it.alts.map((a) => `<button class="chip sm" data-act="rv-alt" data-name="${esc(a)}">${esc(a)}</button>`).join('')}</div>` : ''}
     <div class="meta">${flag ? '<span class="badge">Please check</span>' : ''}
       <span class="badge plain">${esc(CATEGORIES[it.category] || 'Other')}</span>
       ${it.raw ? `<span>Printed as “${esc(it.raw)}”</span>` : ''}</div>
@@ -383,6 +384,13 @@ export function openReview(items, source, photo = null, opts = {}) {
 }
 const rvItem = (el) => review.items.find((i) => i.id === el.closest('.rv').dataset.id);
 on('rv-select', (el) => { const it = rvItem(el); el.checked ? review.selected.add(it.id) : review.selected.delete(it.id); sheetOf(el).refresh(); });
+// One of the photo recognizer's other guesses was tapped: use it as the name.
+on('rv-alt', (el) => {
+  const it = rvItem(el), name = el.dataset.name;
+  const again = finishItem({ raw: it.raw, name, qty: it.qty, unit: it.unit, price: it.price, conf: 1 });
+  Object.assign(it, { name: again.name, foodKey: again.foodKey, category: again.category, location: again.location, isFood: again.isFood, conf: 1, alts: null });
+  sheetOf(el).refresh();
+});
 on('rv-edit', (el) => {
   const it = rvItem(el), f = el.dataset.f, sh = sheetOf(el);
   if (f === 'name') {
@@ -390,7 +398,7 @@ on('rv-edit', (el) => {
     const { name } = splitBrand(el.value.trim());
     const again = finishItem({ raw: it.raw, name, brand: splitBrand(el.value.trim()).brand, qty: it.qty, unit: it.unit, price: it.price, conf: 1, isFood: it.isFood ? undefined : false });
     it.noFood = false; // the name was typed by hand, so match it normally
-    Object.assign(it, { name: again.name, foodKey: again.foodKey, category: again.category, location: again.location, isFood: again.isFood, conf: 1 });
+    Object.assign(it, { name: again.name, foodKey: again.foodKey, category: again.category, location: again.location, isFood: again.isFood, conf: 1, alts: null });
   } else if (f === 'qty') it.qty = Number(el.value) || 0;
   else if (f === 'price') it.price = el.value === '' ? null : Number(el.value);
   else if (f === 'unit') it.unit = el.value;

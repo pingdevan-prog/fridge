@@ -194,7 +194,7 @@ export const LOCATIONS = { fridge: 'Fridge', freezer: 'Freezer', pantry: 'Pantry
 // Default shelf life (days) and location when we do not recognise the food.
 export const CAT_DEFAULTS = {
   produce: ['fridge', 7], bakery: ['pantry', 7], deli: ['fridge', 5], meat: ['fridge', 3], seafood: ['fridge', 2],
-  dairy: ['fridge', 14], frozen: ['freezer', 180], pantry: ['pantry', 365], canned: ['pantry', 720], sauces: ['pantry', 365], grains: ['pantry', 365],
+  dairy: ['fridge', 14], frozen: ['freezer', 180], pantry: ['pantry', 365], canned: ['pantry', 720], sauces: ['fridge', 90], grains: ['pantry', 365],
   spices: ['staples', 730], snacks: ['pantry', 120], beverages: ['pantry', 180], leftovers: ['fridge', 4], other: ['pantry', 90],
 };
 export const CAT_EMOJI = { produce: '🥬', bakery: '🍞', deli: '🥪', meat: '🥩', seafood: '🐟', dairy: '🥛', frozen: '🧊',

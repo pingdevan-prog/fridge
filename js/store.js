@@ -106,7 +106,7 @@ export function addToFridge(f) {
   const guess = categoryOf(f.name);
   if (food && !f.foodKey && guess && !sameKind(food.cat, guess)) food = null;
   const category = (f.category && f.category !== 'other' ? f.category : null) || guess || food?.cat || 'other';
-  const location = f.location || food?.loc || CAT_DEFAULTS[category]?.[0] || 'pantry';
+  const location = f.location || (category === 'sauces' ? null : food?.loc) || CAT_DEFAULTS[category]?.[0] || 'pantry';
   const addedAt = f.addedAt || today();
   const expiresAt = f.expiresAt || estimateExpiry(food, category, location, addedAt);
   const qty = round2(Number(f.qty) || 1), unit = f.unit || 'each';

@@ -23,7 +23,7 @@ It is a single-page web app with no build step and no server. Open it on a phone
 | Nutrition | Built-in table of estimates based on USDA FoodData Central reference values, plus an optional live USDA lookup when editing an item |
 | Calorie ranges | Dietary Guidelines for Americans 2020-2025 |
 | Receipt reading | Claude vision when you add your own Anthropic API key; otherwise on-device text reading (Tesseract.js) with contrast clean-up, a parser that tolerates common misreads, and an H-E-B abbreviation dictionary |
-| Food photos | Claude vision with an API key (also reads packaged foods); otherwise two image models that run on the phone: an object finder (COCO-SSD lite) that counts foods, and a classifier (MobileNet) run over the photo in overlapping squares. These know fresh fruit and vegetables best |
+| Food photos | Claude vision with an API key; otherwise free, on the phone: MobileCLIP (Apple's small image model, about 23 MB, downloaded once) compares the photo with every food in the ingredient list, over the whole photo and in squares for drawers, plus the label reader for package text (also sideways). Unsure answers show the next best guesses as one-tap choices. The food list's picture data is built by `tools/food-vectors.mjs` |
 | Ingredient suggestions | A built-in list of over a thousand cooking ingredients and grocery foods |
 | Prices | What you paid on scanned receipts when available, otherwise rough estimates. Never H-E-B's actual prices |
 | Brands | H-E-B store-brand lines, marked "unverified" until checked on heb.com |

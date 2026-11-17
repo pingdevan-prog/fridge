@@ -39,7 +39,13 @@ export const INGREDIENTS = (() => {
     ['gummy candy', 'snacks'], ['chocolate candy', 'snacks'], ['sour patch kids', 'snacks'], ['vegetable seasoning', 'spices'], ['multigrain chips', 'snacks'],
     ['pretzel crisps', 'snacks'], ['coke zero', 'beverages'], ['diet coke', 'beverages'], ['coca-cola', 'beverages'], ['sprite', 'beverages'],
     ['dr pepper', 'beverages'], ['ramen veggie mix', 'frozen'], ['sweet potato bites', 'frozen'], ['corn on the cob', 'produce'], ['colby cheese', 'dairy'],
-    ['sandwich bread', 'bakery'], ['whole grain bread', 'bakery'], ['ramen seasoning', 'spices'], ['mole sauce', 'sauces'], ['salmon fillet', 'seafood'], ['french beans', 'produce'], ['fresh corn', 'produce'], ['cloud 9 tomatoes', 'produce']]) {
+    ['sandwich bread', 'bakery'], ['whole grain bread', 'bakery'], ['ramen seasoning', 'spices'], ['mole sauce', 'sauces'], ['salmon fillet', 'seafood'], ['french beans', 'produce'], ['fresh corn', 'produce'], ['cloud 9 tomatoes', 'produce'],
+    // Common packaged foods, so the photo recognizer and the suggestions know them too.
+    ['chipotle mayo', 'sauces'], ['sriracha mayo', 'sauces'], ['spicy mayo', 'sauces'], ['garlic aioli', 'sauces'], ['salad kit', 'produce'], ['bagged salad', 'produce'],
+    ['sliced turkey', 'deli'], ['sliced ham', 'deli'], ['lunch meat', 'deli'], ['cheese slices', 'dairy'], ['shredded cheese', 'dairy'], ['yogurt cups', 'dairy'],
+    ['drinkable yogurt', 'dairy'], ['cold brew coffee', 'beverages'], ['bottled water', 'beverages'], ['protein shake', 'beverages'], ['fruit cups', 'snacks'],
+    ['jello cups', 'snacks'], ['salsa jar', 'sauces'], ['tortilla wraps', 'bakery'], ['frozen burritos', 'frozen'], ['frozen vegetables', 'frozen'],
+    ['chicken nuggets', 'frozen'], ['pizza rolls', 'frozen'], ['fish fillets', 'seafood'], ['deli salad', 'deli'], ['rotisserie chicken', 'deli']]) {
     if (!seen.has(name)) { seen.add(name); out.push({ name, cat }); }
   }
   return out;

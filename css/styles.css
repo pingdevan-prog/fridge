@@ -324,3 +324,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 .ing-row .r1 { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 6px; align-items: center; }
 .ing-row .r2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 6px; }
 .ing-row .input { min-height: 42px; padding: 6px 10px; border-radius: 10px; }
+
+/* Other guesses from the photo recognizer, one tap to pick */
+.rv .alts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.chip.sm { min-height: 32px; padding: 0 11px; font-size: .86rem; }
