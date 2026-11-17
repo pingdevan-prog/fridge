@@ -11,7 +11,12 @@ import { FOODS } from '../data/foods.js';
 const PRODUCT_RULES = [
   [/tonkotsu|ichiban|maruchan|top ramen|cup noodles?|shin ramyun/, 'Ramen noodles'],
   [/ramen bae/, 'Ramen veggie mix'],
-  [/oikos|chobani|greek y/, 'Greek yogurt'],
+  [/oikos|otkos|chobani|greek y|tr[ip]+le? z(ero|r)\b/, 'Greek yogurt'],
+  [/\bcloud ?9\b|\bcloudy\b.*tomato|\bcloud\w* (er|to)\b|\bcloudy (er|to)\b/, 'Tomatoes'],
+  [/\bfresh corn\b|corn on the cob|\bsweet corn\b/, 'Corn on the cob'],
+  [/bonne maman|\bpres[eg]\w*v|\bpreserves?\b/, (m, s) => { const f = s.match(/\b(orang|strawberr|apricot|raspberr|cherr|fig|blueberr|peach|blackberr)/); return f ? { orang: 'Orange', strawberr: 'Strawberry', apricot: 'Apricot', raspberr: 'Raspberry', cherr: 'Cherry', fig: 'Fig', blueberr: 'Blueberry', peach: 'Peach', blackberr: 'Blackberry' }[f[1]] + ' preserves' : 'Fruit preserves'; }],
+  [/white rock|club so[dc]a|\bclub s\w*a\b/, 'Club soda'],
+  [/\b(krn|korean)\b.*\b(rmn|ramen)\b.*\b(ssn|seas)/, 'Ramen seasoning'],
   [/swiss miss|hot cocoa/, 'Hot chocolate mix'],
   [/country cro|shedd|i can.?t believe/, 'Butter spread'],
   [/sun ?chips/, 'Multigrain chips'],

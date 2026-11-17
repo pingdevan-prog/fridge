@@ -1,6 +1,7 @@
 // App entry: load saved data, register the tab views, start the service worker.
 import { load, state, save } from './store.js';
 import { initSync } from './lib/sync.js';
+import { categoryOf } from './data/ingredients.js';
 import { readSharedList } from './lib/shopping.js';
 import { render, toast } from './ui/dom.js';
 import './ui/fridge.js';
@@ -15,7 +16,23 @@ import './ui/suggest.js';
 load();
 removeOldDefaults();
 initSync();
+regroupFoods(); // after sync starts, so the fixes reach the other phones too
 render();
+
+/** Sort foods added before the Sauces and Grains groups existed (or filed as Other) into the right group. Runs once per phone. */
+function regroupFoods() {
+  try { if (localStorage.getItem('fridge.regrouped') === '2') return; } catch { return; }
+  let changed = false;
+  for (const i of state.fridge) {
+    if (i.leftover) continue;
+    const g = categoryOf(i.name);
+    if (!g || g === i.category) continue;
+    const fix = i.category === 'other' || ((i.category === 'pantry' || i.category === 'canned') && (g === 'sauces' || g === 'grains')) || (i.category === 'spices' && g === 'produce');
+    if (fix) { i.category = g; changed = true; }
+  }
+  if (changed) save();
+  try { localStorage.setItem('fridge.regrouped', '2'); } catch { /* ignore */ }
+}
 
 /** Earlier versions shipped sample groceries and starter recipes. Clear out anything left over from them. */
 function removeOldDefaults() {

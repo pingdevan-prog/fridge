@@ -15,16 +15,72 @@ const RAW = {
   deli: `rotisserie chicken|potato salad|macaroni salad|chicken salad|egg salad|fresh salsa|pico de gallo|guacamole fresh|deli salad|sushi|prepared tamales|fried chicken|deli sandwich|olive bar olives`,
 };
 
+// Sauces and grains get their own groups (they are listed under pantry/canned above for history).
+const SAUCE = /\b(sauce|salsa|ketchup|mustard|mayo|mayonnaise|miracle whip|dressing|vinaigrette|pesto|relish|marinara|alfredo|aioli|chutney|gochujang|sriracha|sambal oelek|hoisin|teriyaki|worcestershire|tamari|bbq|barbecue|jam|jelly|preserves|marmalade|paste|mole|hummus|tahini|vinegar|pickles?|pickled|capers|olives|queso|nutella|peanut butter|almond butter)\b/;
+const GRAIN = /\b(rice|pasta|penne|spaghetti|rigatoni|fettuccine|linguine|macaroni|rotini|farfalle|orzo|lasagna|noodles?|ramen|udon|soba|quinoa|couscous|bulgur|farro|barley|millet|polenta|grits|oats|oatmeal|cereal|granola|lentils?|dal|split peas|gnocchi|tortellini|ravioli|cream of wheat|dried \w+ beans|dried chickpeas|rajma|mac and cheese)\b/;
+const EXCEPT = { 'rice vinegar': 'sauces', 'rice flour': 'pantry', 'rice cakes': 'snacks', 'rice noodles': 'grains', 'cocoa powder': 'pantry', 'tomato paste': 'sauces', 'peanut butter': 'sauces' };
+function regroup(cat, key) {
+  if (EXCEPT[key]) return EXCEPT[key];
+  if (cat !== 'pantry' && cat !== 'canned') return cat;
+  if (SAUCE.test(key)) return 'sauces';
+  if (GRAIN.test(key)) return 'grains';
+  return cat;
+}
+
 /** All ingredients: [{ name, cat }], no duplicates. */
 export const INGREDIENTS = (() => {
   const seen = new Set(), out = [];
   for (const [cat, list] of Object.entries(RAW)) for (const name of list.split('|')) {
     const key = name.trim().toLowerCase();
-    if (key && !seen.has(key)) { seen.add(key); out.push({ name: key, cat }); }
+    if (key && !seen.has(key)) { seen.add(key); out.push({ name: key, cat: regroup(cat, key) }); }
+  }
+  // Everyday names the receipt reader gives packaged products.
+  for (const [name, cat] of [['coconut flakes', 'pantry'], ['crispy salad topping', 'snacks'], ['butter spread', 'dairy'], ['baby corn', 'produce'],
+    ['gummy candy', 'snacks'], ['chocolate candy', 'snacks'], ['sour patch kids', 'snacks'], ['vegetable seasoning', 'spices'], ['multigrain chips', 'snacks'],
+    ['pretzel crisps', 'snacks'], ['coke zero', 'beverages'], ['diet coke', 'beverages'], ['coca-cola', 'beverages'], ['sprite', 'beverages'],
+    ['dr pepper', 'beverages'], ['ramen veggie mix', 'frozen'], ['sweet potato bites', 'frozen'], ['corn on the cob', 'produce'], ['colby cheese', 'dairy'],
+    ['sandwich bread', 'bakery'], ['whole grain bread', 'bakery'], ['ramen seasoning', 'spices'], ['mole sauce', 'sauces'], ['salmon fillet', 'seafood'], ['french beans', 'produce'], ['fresh corn', 'produce'], ['cloud 9 tomatoes', 'produce']]) {
+    if (!seen.has(name)) { seen.add(name); out.push({ name, cat }); }
   }
   return out;
 })();
 const BY_NAME = new Map(INGREDIENTS.map((i) => [i.name, i.cat]));
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9%' -]+/g, ' ').replace(/\s+/g, ' ').trim();
+const singular = (w) => (w.length > 3 && w.endsWith('ies') ? w.slice(0, -3) + 'y' : w.length > 3 && /(oes|ches|shes)$/.test(w) ? w.slice(0, -2) : w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w);
+const variants = (n) => { const w = n.split(' '), last = w.pop(), base = w.length ? w.join(' ') + ' ' : ''; return [n, base + singular(last), base + last + 's', base + last + 'es']; };
 
-/** Fridge category for an ingredient name from the list, or null. */
-export const ingredientCategory = (name) => BY_NAME.get(String(name || '').trim().toLowerCase()) || null;
+/** Fridge category for an ingredient name from the list (plural or singular), or null. */
+export const ingredientCategory = (name) => { for (const v of variants(norm(name))) if (BY_NAME.has(v)) return BY_NAME.get(v); return null; };
+
+const BY_HEAD = new Map(); // last word (singular) -> list entries ending in it, longest first
+for (const i of INGREDIENTS) { const head = singular(i.name.split(' ').pop()); if (!BY_HEAD.has(head)) BY_HEAD.set(head, []); BY_HEAD.get(head).push(i); }
+for (const l of BY_HEAD.values()) l.sort((a, b) => b.name.length - a.name.length);
+const SPICE = /\b(seasoning|spices?|rub|masala)\b/;
+const DRINK = /\b(coke|cola|sprite|soda|pepsi|fanta|juice|lemonade|kombucha|gatorade|powerade|energy drink|iced tea|sparkling water|wine|beer)\b/;
+const SNACK = /\b(chips|crisps|pretzels?|candy|gumm(y|ies)|cookies|crackers|popcorn|jerky|granola bars?|protein bars?|trail mix)\b/;
+
+/**
+ * Best fridge category for any food name ("Baby bella mushrooms", "Mole sauce", "Coke Zero"), or null when unsure.
+ * Goes by the whole name first, then by what kind of product the words say, then by the main (last) word.
+ */
+export function categoryOf(name) {
+  const n = norm(name);
+  if (!n) return null;
+  const exact = ingredientCategory(n);
+  if (exact) return exact;
+  if (SPICE.test(n)) return 'spices';
+  if (SAUCE.test(n)) return 'sauces';
+  if (DRINK.test(n)) return 'beverages';
+  if (SNACK.test(n)) return 'snacks';
+  if (GRAIN.test(n)) return 'grains';
+  if (/\bcheese\b/.test(n)) return 'dairy';
+  // The main word of a food name is the last one: "baby bella mushrooms" is mushrooms, "coconut flakes" is not coconut.
+  const words = n.split(' '), head = singular(words[words.length - 1]);
+  for (const i of BY_HEAD.get(head) || []) if (i.name.split(' ').every((w) => words.includes(w) || words.map(singular).includes(singular(w)))) return i.cat;
+  return null;
+}
+
+// Categories that sit together on the same shelves; a food-table match in another group is the wrong food.
+const GROUP = { meat: 'm', seafood: 'm', deli: 'm', pantry: 'p', grains: 'p', sauces: 'p', canned: 'p', spices: 'p', snacks: 'p', bakery: 'p' };
+/** Do two categories describe the same kind of food? */
+export const sameKind = (a, b) => a === b || (GROUP[a] && GROUP[a] === GROUP[b]);

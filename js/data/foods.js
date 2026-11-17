@@ -179,19 +179,23 @@ export const SECTIONS = ['Produce', 'Bakery & Tortillas', 'Deli', 'Meat & Seafoo
   'Pantry', 'Canned & Jarred', 'Spices & Baking', 'Snacks', 'Beverages', 'Household', 'Other'];
 
 export const CATEGORIES = {
-  produce: 'Produce', bakery: 'Bakery & Tortillas', deli: 'Deli', meat: 'Meat & Seafood', seafood: 'Meat & Seafood',
-  dairy: 'Dairy & Eggs', frozen: 'Frozen', pantry: 'Pantry', canned: 'Canned & Jarred', spices: 'Spices & Baking',
-  snacks: 'Snacks', beverages: 'Beverages', household: 'Household', leftovers: 'Leftovers', other: 'Other',
+  produce: 'Produce', meat: 'Meat & Seafood', seafood: 'Meat & Seafood', dairy: 'Dairy & Eggs', deli: 'Deli', bakery: 'Bakery & Tortillas',
+  sauces: 'Sauces & Condiments', grains: 'Pasta, Rice & Grains', canned: 'Canned & Jarred', pantry: 'Baking & Pantry', spices: 'Spices & Seasonings',
+  snacks: 'Snacks & Sweets', beverages: 'Drinks', frozen: 'Frozen', household: 'Household', leftovers: 'Leftovers', other: 'Other',
 };
-export const sectionFor = (cat) => CATEGORIES[cat] === 'Leftovers' ? 'Other' : (CATEGORIES[cat] || 'Other');
+// Store aisles for the shopping list (kept as H-E-B lays them out, separate from the fridge groups).
+const AISLE = { produce: 'Produce', bakery: 'Bakery & Tortillas', deli: 'Deli', meat: 'Meat & Seafood', seafood: 'Meat & Seafood', dairy: 'Dairy & Eggs',
+  frozen: 'Frozen', pantry: 'Pantry', grains: 'Pantry', sauces: 'Pantry', canned: 'Canned & Jarred', spices: 'Spices & Baking', snacks: 'Snacks',
+  beverages: 'Beverages', household: 'Household' };
+export const sectionFor = (cat) => AISLE[cat] || 'Other';
 
 export const LOCATIONS = { fridge: 'Fridge', freezer: 'Freezer', pantry: 'Pantry', staples: 'Spices & Staples' };
 
 // Default shelf life (days) and location when we do not recognise the food.
 export const CAT_DEFAULTS = {
   produce: ['fridge', 7], bakery: ['pantry', 7], deli: ['fridge', 5], meat: ['fridge', 3], seafood: ['fridge', 2],
-  dairy: ['fridge', 14], frozen: ['freezer', 180], pantry: ['pantry', 365], canned: ['pantry', 720],
+  dairy: ['fridge', 14], frozen: ['freezer', 180], pantry: ['pantry', 365], canned: ['pantry', 720], sauces: ['pantry', 365], grains: ['pantry', 365],
   spices: ['staples', 730], snacks: ['pantry', 120], beverages: ['pantry', 180], leftovers: ['fridge', 4], other: ['pantry', 90],
 };
 export const CAT_EMOJI = { produce: '🥬', bakery: '🍞', deli: '🥪', meat: '🥩', seafood: '🐟', dairy: '🥛', frozen: '🧊',
-  pantry: '🥫', canned: '🥫', spices: '🧂', snacks: '🍿', beverages: '🧃', household: '🧻', leftovers: '🍱', other: '🛒' };
+  pantry: '🥫', canned: '🥫', sauces: '🥫', grains: '🍚', spices: '🧂', snacks: '🍿', beverages: '🧃', household: '🧻', leftovers: '🍱', other: '🛒' };

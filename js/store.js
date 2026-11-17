@@ -16,6 +16,7 @@
 //   brandChecks{}        BrandRecommendation verification results keyed by "brand|food"
 //   prices{}             last price paid per food from scanned receipts { [foodKey]: { price, qty, unit, date } }
 import { FOOD, CAT_DEFAULTS } from './data/foods.js';
+import { categoryOf, sameKind } from './data/ingredients.js';
 import { findFood, nameScore } from './lib/match.js';
 import { convert } from './lib/units.js';
 
@@ -101,8 +102,10 @@ export function estimateExpiry(food, category, location, from = today()) {
  * grows instead of creating a duplicate. Returns the fridge item.
  */
 export function addToFridge(f) {
-  const food = f.foodKey === false ? null : f.foodKey ? FOOD[f.foodKey] : findFood(f.name); // false = never match to a basic ingredient
-  const category = f.category || food?.cat || 'other';
+  let food = f.foodKey === false ? null : f.foodKey ? FOOD[f.foodKey] : findFood(f.name); // false = never match to a basic ingredient
+  const guess = categoryOf(f.name);
+  if (food && !f.foodKey && guess && !sameKind(food.cat, guess)) food = null;
+  const category = (f.category && f.category !== 'other' ? f.category : null) || guess || food?.cat || 'other';
   const location = f.location || food?.loc || CAT_DEFAULTS[category]?.[0] || 'pantry';
   const addedAt = f.addedAt || today();
   const expiresAt = f.expiresAt || estimateExpiry(food, category, location, addedAt);

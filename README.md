@@ -13,6 +13,7 @@ It is a single-page web app with no build step and no server. Open it on a phone
 - **Shop.** What the plan needs minus what is in the fridge, grouped by H-E-B store section, with brand suggestions and an estimated total.
 - **Cooking mode.** Pick servings, amounts scale, big step-by-step text with timers, screen stays on. "Done cooking" subtracts what you used from the fridge and logs the calories.
 - **Me.** Calories and macros per family member for today and the last 7 days, plus a weekly healthy-eating summary.
+- **Grouped fridge.** Food is grouped by type (Produce, Meat & Seafood, Dairy & Eggs, Sauces & Condiments, Pasta, Rice & Grains, Snacks, Drinks and more), or by where it is kept.
 - **Sync.** Everyone who opens the app shares one kitchen automatically: add food or a recipe on one phone and it shows up on the others within a few seconds. A family can switch to a private family name and password instead (Me, Sync).
 
 ## Where the data comes from

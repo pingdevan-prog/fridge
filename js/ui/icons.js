@@ -59,7 +59,7 @@ export function ic(name, cls = '', filled = false) {
 // Food category -> icon and tint.
 export const CAT_ICON = {
   produce: ['leaf', 'g'], dairy: ['milk', 'b'], meat: ['meat', 'r'], seafood: ['fish', 't'], bakery: ['bread', 'a'], deli: ['bowl', 'o'],
-  frozen: ['snow', 'b'], pantry: ['jar', 'a'], canned: ['jar', 'o'], spices: ['shaker', 'p'], snacks: ['cookie', 'a'], beverages: ['cup', 't'],
+  frozen: ['snow', 'b'], pantry: ['jar', 'a'], canned: ['jar', 'o'], sauces: ['jar', 'r'], grains: ['bowl', 'a'], spices: ['shaker', 'p'], snacks: ['cookie', 'a'], beverages: ['cup', 't'],
   household: ['box', 'n'], leftovers: ['bowl', 'o'], other: ['box', 'n'],
 };
 /** Round tinted badge with the food category's icon. */

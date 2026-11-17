@@ -4,7 +4,7 @@ import { ABBR, NONFOOD, SKIP_LINE } from '../data/heb.js';
 import { FOODS, CAT_DEFAULTS, CATEGORIES } from '../data/foods.js';
 import { findFood, tokens } from './match.js';
 import { normUnit } from './units.js';
-import { ingredientCategory, INGREDIENTS } from '../data/ingredients.js';
+import { categoryOf, sameKind, INGREDIENTS } from '../data/ingredients.js';
 import { uid } from '../store.js';
 import { simpleName } from './names.js';
 
@@ -15,6 +15,7 @@ for (const f of FOODS) for (const a of [f.key, ...f.aliases]) tokens(a).forEach(
 const BRAND_PREFIXES = ['H-E-B Organics', 'Central Market Organics', 'Hill Country Fare', 'Central Market', 'H-E-B Select Ingredients', 'H-E-B'];
 const SIZE_UNITS = { OZ: 'oz', LB: 'lb', LBS: 'lb', CT: 'each', PK: 'each', GAL: 'gallon', QT: 'quart', PT: 'pint', ML: 'ml', KG: 'kg', G: 'g', L: 'l', RL: 'each', DZ: 'dozen', DOZ: 'dozen' };
 const COMMON = new Set(['FRESH', 'CRISP', 'FRENCH', 'SWISS', 'STRING', 'THICK', 'CRUNCH', 'DISH', 'SOAP', 'HASS', 'ROMA', 'RED', 'OLD', 'BAG']);
+const cap1 = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 const titleCase = (w) => (/^\d/.test(w) ? w.toLowerCase() : w.charAt(0) + w.slice(1).toLowerCase());
 
 /** Split "H-E-B Organics Boneless Chicken Breast" into brand + name. */
@@ -65,8 +66,10 @@ export function expandName(raw) {
  */
 export function finishItem(p) {
   const nonFood = p.isFood === false || NONFOOD.test(p.name) || p.category === 'household';
-  const food = nonFood || p.noFood ? null : findFood(p.name);
-  const category = nonFood ? 'household' : (food?.cat || (CATEGORIES[p.category] ? p.category : ingredientCategory(p.name) || 'other'));
+  const guess = nonFood ? null : categoryOf(p.name);
+  let food = nonFood || p.noFood ? null : findFood(p.name);
+  if (food && guess && !sameKind(food.cat, guess)) food = null; // "Serrano pepper" is not black pepper
+  const category = nonFood ? 'household' : (guess || food?.cat || (CATEGORIES[p.category] && p.category !== 'other' ? p.category : 'other'));
   const frozen = /\bfrozen\b/i.test(p.name);
   const location = nonFood ? null : frozen ? 'freezer' : (food?.loc || CAT_DEFAULTS[category]?.[0] || 'pantry');
   let qty = p.qty, unit = p.unit ? normUnit(p.unit) : null;
@@ -75,8 +78,8 @@ export function finishItem(p) {
     if (p.weight) { qty = p.weight; unit = 'lb'; }
     else if (p.size && buy === 'can' && p.size.unit === 'oz') { qty = p.count || 1; unit = 'can'; }
     else if (p.size) { qty = p.size.n * (p.count || 1); unit = p.size.unit; }
-    else if (p.count) { qty = p.count; unit = buy && !['lb', 'oz', 'gallon', 'dozen'].includes(buy) ? buy : 'each'; }
-    else { qty = 1; unit = !food ? 'each' : (buy === 'lb' || buy === 'oz' ? 'package' : buy); }
+    else if (p.count) { qty = p.count; unit = !p.each && buy && !['lb', 'oz', 'gallon', 'dozen'].includes(buy) ? buy : 'each'; } // "2 Ea." on the receipt means each
+    else { qty = 1; unit = !food || /on the cob/i.test(p.name) ? 'each' : (buy === 'lb' || buy === 'oz' ? 'package' : buy); }
   }
   const conf = p.conf != null ? p.conf : Math.min(1, (nonFood ? 0.45 : food ? 0.45 : 0) + 0.55 * (p.known ?? 0.5));
   return {
@@ -98,6 +101,9 @@ const FLAG = /^(?:[FT][A-Za-z0-9]?|[NXWHE][FTNXWHSEfowh]?|[|!Iil1+:;.,©®£¢�
 const ITEMS_END = /^\W{0,3}(sub\s*-?\s*total|total\b|balance\s*due|\*+\s*total)/i;
 // Lines that only appear after the items (payment, footer). If the total line was misread, these still end the list.
 const AFTER_ITEMS = /\b(items\s*purchased|eps\s*amex|visa\s*eps|visa\s*credit|contactless|appr\s*no|ref\s*no|cashier|self\s*checkout|receipt\s*expires|store\s*hours|food-drugs|pharmacy)\b/i;
+
+/** How many digits two prices differ by (2.48 vs 2.98 = 1). */
+const digitsOff = (a, b) => editDistance(a.toFixed(2), b.toFixed(2), 3);
 
 /** All money amounts in a line, as numbers, in order. */
 function amounts(line) {
@@ -203,10 +209,15 @@ function readLines(lines) {
     const last = found[found.length - 1];
     const q = qtyLine(line) || (pending || (last && !last.hasQty && amounts(line).length >= 2) ? contextQty(line) : null);
     if (q) {
-      const target = pending || found[found.length - 1];
+      const wasPending = !!pending, target = pending || found[found.length - 1];
       pending = null;
       if (!target || target.hasQty) continue;
-      if (q.kind === 'weight') target.weight = q.qty; else target.count = q.qty;
+      // A quantity line under an item that already has its own, different price belongs to a name line the
+      // reader missed (for example "SERRANO PEPPER"): do not give its weight and price to the item above.
+      // (Loose produce whose price is one digit off a number on the quantity line is the same item read badly: "0.19" for "0.49".)
+      if (!wasPending && target.price != null && q.total != null && Math.abs(target.price - q.total) > 0.01 &&
+        !(categoryOf(target.raw) === 'produce' && amounts(line).some((v) => digitsOff(v, target.price) <= 1))) continue;
+      if (q.kind === 'weight') target.weight = q.qty; else { target.count = q.qty; target.each = true; }
       if (q.total != null) target.price = q.total;   // the quantity line's total is the item's price
       target.hasQty = true;
       if (!found.includes(target)) found.push(target);
@@ -277,29 +288,79 @@ export function parseReceiptReadings(readings) {
     for (const v of variants) if (v.price != null) votes.set(v.price, (votes.get(v.price) || 0) + 1 + quality(v) / 10);
     const price = votes.size ? [...votes].sort((a, b) => b[1] - a[1])[0][0] : null;
     const named = [...variants].sort((a, b) => quality(b) - quality(a) || b.raw.length - a.raw.length)[0];
-    const withQty = variants.find((v) => v.hasQty && v.price === price) || variants.find((v) => v.hasQty);
-    return { ...named, price, weight: withQty?.weight, count: withQty?.count, hasQty: !!withQty, agree: votes.size ? Math.max(...votes.values()) : 0 };
+    const withQty = variants.find((v) => v.hasQty && (v.price === price || price == null));
+    return { ...named, price, weight: withQty?.weight, count: withQty?.count, each: withQty?.each, hasQty: !!withQty, agree: votes.size ? Math.max(...votes.values()) : 0 };
   });
   return Object.assign(finishReceipt(merged, summary.subtotal ?? null), { subtotal: summary.subtotal ?? null, summaryKind: summary.summaryKind || null });
 }
 
 /**
- * Join receipt items read from several photos of one long receipt (top half, bottom half...).
- * Lines that appear in both photos (the overlap) are kept once. The subtotal comes from the last photo.
+ * Join receipt items read from several photos of one long receipt (top, middle, bottom; or the whole receipt
+ * and then a closer photo of part of it). The photos are lined up item by item, the way you would match two
+ * overlapping lists by eye: the same price and a similar name in the same order means the same receipt line,
+ * so it is kept once even if one photo garbled the name or misread the price. Lines only one photo caught are
+ * kept. The subtotal comes from the last photo that shows one.
  */
 export function joinReceiptParts(parts) {
-  const out = [];
-  for (const part of parts) {
-    const tail = out.slice(-10);
-    for (const it of part) {
-      const dup = tail.find((t) => t.price === it.price && nameOverlap(t.name, it.name) >= 0.5 && !t._used);
-      if (dup) { dup._used = true; if (it.conf > dup.conf) Object.assign(dup, { name: it.name, conf: it.conf, foodKey: it.foodKey, category: it.category }); continue; }
-      out.push(it);
-    }
-  }
-  out.forEach((i) => delete i._used);
+  let out = [];
+  for (const part of parts) out = out.length ? joinTwo(out, [...part]) : [...part];
   const last = parts.filter((p) => p.subtotal != null).pop() || {};
   return Object.assign(out, { subtotal: last.subtotal ?? null, summaryKind: last.summaryKind || null });
+}
+
+/** How alike two receipt rows are: 3 = surely the same line, 2 = same name, 0.8 = same price only, below 0 = different. */
+function rowLikeness(a, b) {
+  const n = Math.max(nameOverlap(a.raw || a.name, b.raw || b.name), a.name && a.name === b.name ? 1 : 0);
+  const samePrice = a.price != null && a.price === b.price;
+  if (samePrice && n >= 0.5) return 3;
+  if (n >= 0.5) return 2;      // one photo misread the price
+  if (samePrice) return 0.8;   // one photo garbled the name (prices like 2.98 repeat, so this alone is weak)
+  return -1.5;
+}
+const better = (a, b) => ((b.conf || 0) > (a.conf || 0) ? b : a);
+
+function joinTwo(A, B) {
+  // Best-matching stretch of the two lists (local sequence alignment).
+  const GAP = -0.7, rows = A.length + 1, cols = B.length + 1;
+  const S = Array.from({ length: rows }, () => new Float32Array(cols));
+  let best = 0, bi = 0, bj = 0;
+  for (let i = 1; i < rows; i++) for (let j = 1; j < cols; j++) {
+    const v = Math.max(0, S[i - 1][j - 1] + rowLikeness(A[i - 1], B[j - 1]), S[i - 1][j] + GAP, S[i][j - 1] + GAP);
+    S[i][j] = v;
+    if (v > best) { best = v; bi = i; bj = j; }
+  }
+  if (best < 4.5) return [...A, ...B]; // no real overlap: the photos show different parts
+  // Walk back through the matching stretch.
+  const steps = [];
+  let i = bi, j = bj;
+  while (i > 0 && j > 0 && S[i][j] > 0) {
+    const like = rowLikeness(A[i - 1], B[j - 1]);
+    if (Math.abs(S[i][j] - (S[i - 1][j - 1] + like)) < 1e-4 && like > 0) { steps.push(['same', i - 1, j - 1]); i--; j--; }
+    else if (Math.abs(S[i][j] - (S[i - 1][j] + GAP)) < 1e-4) { steps.push(['a', i - 1]); i--; }
+    else if (Math.abs(S[i][j] - (S[i][j - 1] + GAP)) < 1e-4) { steps.push(['b', j - 1]); j--; }
+    else { steps.push(['a', i - 1], ['b', j - 1]); i--; j--; }
+  }
+  const a0 = i, b0 = j;
+  steps.reverse();
+  // Rows of B outside the matched stretch are kept unless they clearly repeat a row of A there too.
+  const repeats = (row, pool) => pool.some((x) => rowLikeness(x, row) >= 2);
+  const out = A.slice(0, a0);
+  for (const row of B.slice(0, b0)) if (!repeats(row, A.slice(0, a0))) out.push(row);
+  for (const [kind, x, y] of steps) {
+    if (kind === 'same') out.push(better(A[x], B[y]));
+    else if (kind === 'a') out.push(A[x]);
+    else {
+      // A row only this photo has, inside the overlap: keep it unless the other photo has the very same line close by
+      // (one reading can put a line slightly out of order).
+      const at = steps.findIndex((s) => s[0] === 'b' && s[1] === x);
+      const prevA = steps.slice(0, at).reverse().find((s) => s[0] !== 'b'), posA = prevA ? prevA[1] : a0;
+      const near = A.slice(Math.max(0, posA - 10), posA + 11);
+      if (!near.some((r) => rowLikeness(r, B[x]) >= 3)) out.push(B[x]);
+    }
+  }
+  out.push(...A.slice(bi));
+  for (const row of B.slice(bj)) if (!repeats(row, A.slice(bi))) out.push(row);
+  return out;
 }
 
 function nameOverlap(a, b) {
@@ -336,7 +397,10 @@ function finishReceipt(found, subtotal = null) {
       const ex = expandName(fixed);
       // Plain everyday name ("Barilla Whole Grain Penne" -> "Penne pasta"); the brand is kept on the side.
       const plain = simpleName([ex.brand, ex.name].filter(Boolean).join(' '));
-      const item = finishItem({ ...p, raw: p.raw, ...ex, name: plain.name || ex.name, brand: '' });
+      // A one- or two-letter name ("Er", "Al") tells nobody anything: show more of what was printed instead.
+      let name = plain.name || ex.name;
+      if (name.replace(/[^a-z]/gi, '').length < 3 && ex.name.replace(/[^a-z]/gi, '').length > name.replace(/[^a-z]/gi, '').length) name = cap1(ex.name.toLowerCase());
+      const item = finishItem({ ...p, raw: p.raw, ...ex, name, brand: '' });
       item.brand = plain.brand || ex.brand || '';
       // Confidence comes from how many words were recognised, so garbled lines get flagged for a check.
       item.conf = Math.min(item.conf, 0.35 + 0.65 * q - (p.price == null ? 0.2 : 0));

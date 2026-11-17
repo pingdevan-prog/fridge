@@ -2,7 +2,7 @@
 import { state, commit, addToFridge, deductFromItem, expiringSoon, estimateExpiry, today, daysBetween, uid, round2 } from '../store.js';
 import { FOOD, LOCATIONS, CATEGORIES, CAT_DEFAULTS } from '../data/foods.js';
 import { findFood } from '../lib/match.js';
-import { ingredientCategory } from '../data/ingredients.js';
+import { categoryOf, sameKind } from '../data/ingredients.js';
 import { UNITS, fmtAmount } from '../lib/units.js';
 import { itemNutrition, eatNutrition, usdaSearch } from '../lib/nutrition.js';
 import { parseReceiptText, parseReceiptReadings, joinReceiptParts, finishItem, splitBrand, mergeItems } from '../lib/receipt.js';
@@ -26,17 +26,23 @@ function tile(i, showExpiry = false) {
     <span class="qt">${esc(amount(i))}${i.brand ? ' · ' + esc(i.brand) : ''}</span></button>`;
 }
 
+// How the list is grouped: by kind of food (Produce, Dairy, Sauces...) or by where it is kept. Remembered per phone.
+let groupBy = (() => { try { return localStorage.getItem('fridge.groupBy') || 'type'; } catch { return 'type'; } })();
+const TYPE_ORDER = ['produce', 'meat', 'dairy', 'deli', 'bakery', 'sauces', 'grains', 'canned', 'pantry', 'spices', 'snacks', 'beverages', 'frozen', 'leftovers', 'other'];
+const typeOf = (i) => (i.leftover ? 'leftovers' : i.category === 'seafood' ? 'meat' : TYPE_ORDER.includes(i.category) ? i.category : 'other');
+
+function shelf(label, list) {
+  return `<section class="shelf"><div class="shelf-head"><h2>${esc(label)}</h2><span class="muted small">${list.length} ${list.length === 1 ? 'item' : 'items'}</span></div>
+      <div class="tiles">${list.sort((a, b) => a.name.localeCompare(b.name)).map((i) => tile(i)).join('')}</div><div class="shelf-edge"></div></section>`;
+}
+
 function listHtml() {
   const term = q.trim().toLowerCase();
   const items = state.fridge.filter((i) => (loc === 'all' || i.location === loc) &&
     (!term || i.name.toLowerCase().includes(term) || (i.brand || '').toLowerCase().includes(term) || (i.foodKey || '').includes(term)));
   if (!items.length) return `<div class="empty"><div class="big">${ic('search')}</div><p class="muted">Nothing matches. Try a different word or shelf.</p></div>`;
-  return Object.entries(LOCATIONS).map(([key, label]) => {
-    const list = items.filter((i) => i.location === key).sort((a, b) => a.name.localeCompare(b.name));
-    if (!list.length) return '';
-    return `<section class="shelf"><div class="shelf-head"><h2>${label}</h2><span class="muted small">${list.length} ${list.length === 1 ? 'item' : 'items'}</span></div>
-      <div class="tiles">${list.map((i) => tile(i)).join('')}</div><div class="shelf-edge"></div></section>`;
-  }).join('');
+  if (groupBy === 'type') return TYPE_ORDER.map((t) => { const list = items.filter((i) => typeOf(i) === t); return list.length ? shelf(CATEGORIES[t], list) : ''; }).join('');
+  return Object.entries(LOCATIONS).map(([key, label]) => { const list = items.filter((i) => i.location === key); return list.length ? shelf(label, list) : ''; }).join('');
 }
 
 function render() {
@@ -55,6 +61,9 @@ function render() {
     <div class="stack tight" style="margin-top:14px">
       <input class="input" type="search" placeholder="Search your food" value="${esc(q)}" data-input="fridge-search" aria-label="Search your food">
       <div class="chips">${[['all', 'All'], ...Object.entries(LOCATIONS)].map(([k, l]) => `<button class="chip ${loc === k ? 'on' : ''}" data-act="fridge-loc" data-loc="${k}">${l}</button>`).join('')}</div>
+      <div class="rowf group-by"><span class="muted small">Group by</span><div class="seg" role="group" aria-label="Group by">
+        <button class="${groupBy === 'type' ? 'on' : ''}" data-act="fridge-group" data-g="type" aria-pressed="${groupBy === 'type'}">Type of food</button>
+        <button class="${groupBy === 'shelf' ? 'on' : ''}" data-act="fridge-group" data-g="shelf" aria-pressed="${groupBy === 'shelf'}">Where it's kept</button></div></div>
     </div>
     <div id="fridge-list">${listHtml()}</div>
     ${state.householdItems.length ? `<div class="sec"><button class="li" data-act="household-open">${catBadge('household')}<span class="grow nm">Household items</span><span class="muted">${state.householdItems.length}</span>${ic('chevR', 'chev')}</button></div>` : ''}
@@ -76,6 +85,7 @@ on('add-open', () => openSheet(() => `<h2>Add food</h2>
 
 on('fridge-search', (el) => { q = el.value; $('#fridge-list').innerHTML = listHtml(); });
 on('fridge-loc', (el) => { loc = el.dataset.loc; redraw(); });
+on('fridge-group', (el) => { groupBy = el.dataset.g; try { localStorage.setItem('fridge.groupBy', groupBy); } catch { /* ignore */ } redraw(); });
 on('cook-expiring', () => { ui.mealsFilter = { useExpiring: true }; go('meals'); });
 on('household-open', () => openSheet(() => `<h2>Household items</h2><p class="sub">Non-food things from your receipts.</p>
   <div class="list" style="margin-top:12px">${state.householdItems.map((h) => `<div class="li">${catBadge('household')}<span class="grow"><span class="nm">${esc(h.name)}</span><br><span class="muted small">${esc(fmtAmount(h.qty, h.unit))} · ${esc(fmtDate(h.addedAt))}${h.price != null ? ' · ' + money(h.price) : ''}</span></span>
@@ -154,10 +164,12 @@ on('item-name', (el) => {
   const sh = sheetOf(el), c = sh.ctx;
   if (c.item) return;
   c.read();
-  const food = findFood(c.d.name);
-  if (food) { c.d.category = food.cat; c.d.location = food.loc; c.d.unit = ['lb', 'oz'].includes(food.buy[0]) ? 'lb' : food.buy[0]; c.d.expiresAt = estimateExpiry(food, food.cat, food.loc); sh.refresh(); return; }
+  let food = findFood(c.d.name);
+  const guess = categoryOf(c.d.name);
+  if (food && guess && !sameKind(food.cat, guess)) food = null;
+  if (food) { c.d.category = guess || food.cat; c.d.location = food.loc; c.d.unit = ['lb', 'oz'].includes(food.buy[0]) ? 'lb' : food.buy[0]; c.d.expiresAt = estimateExpiry(food, food.cat, food.loc); sh.refresh(); return; }
   // Not in the nutrition table, but in the ingredient list: still pick the right type, shelf and date.
-  const cat = ingredientCategory(c.d.name);
+  const cat = guess;
   if (cat) { const [loc] = CAT_DEFAULTS[cat] || ['pantry']; c.d.category = cat; c.d.location = loc; c.d.expiresAt = estimateExpiry(null, cat, loc); sh.refresh(); }
 });
 on('item-loc', (el) => {
