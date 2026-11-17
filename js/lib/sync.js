@@ -1,4 +1,5 @@
-// Family sync: every phone that signs in with the same family name and password shares one fridge.
+// Sync: every phone shares one kitchen. By default everyone who opens the app joins the shared kitchen
+// automatically (no sign-in). A family can instead pick a private family name and password.
 //
 // How it works
 // - Every phone keeps a full copy of the data. Sync only passes changes around.
@@ -15,14 +16,22 @@ const KIND = 30078, DTAG = 'fridge-family-v1', CHUNK = 45000;
 const LISTS = ['members', 'fridge', 'householdItems', 'plan', 'shopping', 'logs', 'ratings']; // arrays of { id }
 const MAPS = ['recipes', 'prices', 'brandChecks'];                                               // objects keyed by id
 const SETS = ['favorites'];                                                                      // arrays of ids
-const OBJS = ['household', 'settings'];                                                          // single objects
+const OBJS = ['household'];                                                                      // single objects (settings stay per phone)
 const COLLS = [...LISTS, ...MAPS, ...SETS];
 const TOMBSTONE_DAYS = 90;
+// The shared kitchen everyone joins automatically. Its name and password are in this public code, so anyone
+// with the app can read and change it: it is shared by design. Private families use their own password.
+// Copies running on this computer for testing use their own kitchen, so test items never reach the real one.
+const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+const SHARED = { name: LOCAL ? 'everyone-local-test' : 'everyone', password: 'fridge-shared-kitchen-2026' };
+const PAUSED_KEY = 'fridge.sync.paused';
 
 let cfg = null;      // { name, sk, pk, key, lastId, lastAt, dirty, last }
 let shadow = {};     // what was last saved, to spot changes: collection -> Map(id -> JSON)
 let busy = false, timer = null, poll = null, again = false;
-export const syncStatus = { on: false, name: '', state: 'off', last: 0, error: '', relays: 0 };
+let live = [];              // open relay connections that tell us the moment another phone saves
+const mine = new Set();     // ids of events this phone published (so our own echo does not trigger a sync)
+export const syncStatus = { on: false, shared: false, name: '', state: 'off', last: 0, error: '', relays: 0 };
 const loadCfg = () => { try { return JSON.parse(localStorage.getItem(CFG_KEY) || 'null'); } catch { return null; } };
 const saveCfg = () => { try { cfg ? localStorage.setItem(CFG_KEY, JSON.stringify(cfg)) : localStorage.removeItem(CFG_KEY); } catch { /* ignore */ } };
 
@@ -134,6 +143,7 @@ async function seal() {
   };
   const events = [await make(DTAG, JSON.stringify({ v: 1, z, iv: b64(iv), n: parts.length, h, ct: parts[0] }))];
   for (let i = 1; i < parts.length; i++) events.push(await make(`${DTAG}:${i}`, parts[i]));
+  for (const e of events) mine.add(e.id);
   return events;
 }
 /** Decrypt relay events back into data. Returns null when a multi-part upload is not complete yet. */
@@ -224,35 +234,88 @@ export async function syncNow() {
   document.dispatchEvent(new CustomEvent('fridge-sync'));
   if (again) { again = false; schedule(1500); }
 }
-function schedule(ms = 3000) { if (!cfg) return; clearTimeout(timer); timer = setTimeout(syncNow, ms); }
+function schedule(ms = 800) { if (!cfg) return; clearTimeout(timer); timer = setTimeout(syncNow, ms); }
+
+// ---------- Live updates ----------
+// Keep a connection open to each relay and ask it to forward new saves from our kitchen as they happen,
+// so a change on one phone shows up on the others within a few seconds.
+function connectLive(url, since, tries = 0) {
+  if (!cfg) return;
+  const pk = cfg.pk, entry = { closed: false, ws: null };
+  try { entry.ws = new WebSocket(url); } catch { return; }
+  live.push(entry);
+  const ws = entry.ws;
+  ws.onopen = () => { tries = 0; ws.send(JSON.stringify(['REQ', 'live', { kinds: [KIND], authors: [pk], since }])); };
+  ws.onmessage = (ev) => {
+    try {
+      const m = JSON.parse(ev.data);
+      if (m[0] === 'EVENT' && m[2]?.pubkey === pk && !mine.has(m[2].id) && m[2].id !== cfg?.lastId) schedule(400);
+    } catch { /* ignore junk */ }
+  };
+  ws.onclose = () => {
+    live = live.filter((x) => x !== entry);
+    if (entry.closed || cfg?.pk !== pk) return;
+    // Reconnect (phones drop connections when the screen locks). Ask for anything missed in the last minute.
+    setTimeout(() => { if (cfg?.pk === pk && !live.some((x) => x.url === url)) connectLive(url, Math.floor(Date.now() / 1000) - 60, tries + 1); }, Math.min(60000, 2000 * 2 ** tries));
+  };
+  entry.url = url;
+}
+function listen() {
+  stopListening();
+  const since = Math.floor(Date.now() / 1000) - 60;
+  for (const url of RELAYS) connectLive(url, since);
+}
+function stopListening() {
+  for (const e of live) { e.closed = true; try { e.ws.close(); } catch { /* closed */ } }
+  live = [];
+}
 
 function start() {
-  Object.assign(syncStatus, { on: true, name: cfg.name, state: 'idle', last: cfg.last || 0 });
+  Object.assign(syncStatus, { on: true, shared: !!cfg.shared, name: cfg.name, state: 'idle', last: cfg.last || 0 });
+  try { localStorage.removeItem(PAUSED_KEY); } catch { /* ignore */ }
   clearInterval(poll);
-  poll = setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 30000);
+  poll = setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 30000); // backup in case a live message is missed
+  listen();
   schedule(300);
 }
 
-/** Sign this phone in to a family. The same name and password on another phone joins the same data. */
-export async function joinFamily(name, password) {
-  if (!crypto?.subtle) throw new Error('Family sync needs a secure (https) connection.');
-  const clean = name.trim().toLowerCase().replace(/\s+/g, ' ');
-  if (clean.length < 3) throw new Error('Pick a family name with at least 3 letters.');
-  if (password.length < 8) throw new Error('Use a password with at least 8 characters.');
-  const { key, sk } = await deriveKeys(clean, password);
+async function connect(name, password, shared) {
+  if (!crypto?.subtle) throw new Error('Sync needs a secure (https) connection.');
+  const { key, sk } = await deriveKeys(name, password);
   const s = await schnorr();
-  cfg = { name: clean, key, sk, pk: hex(s.getPublicKey(sk)), lastId: '', lastAt: 0, dirty: true, last: 0 };
+  stopListening();
+  cfg = { name, shared, key, sk, pk: hex(s.getPublicKey(sk)), lastId: '', lastAt: 0, dirty: true, last: 0 };
   saveCfg();
   start();
   await syncNow();
-  if (syncStatus.state === 'error') { const msg = syncStatus.error; leaveFamily(); throw new Error(msg); }
   return { found: syncStatus.found };
 }
-/** Stop syncing on this phone. The data stays on the phone. */
+
+/** Join the kitchen everyone shares. Happens on its own the first time the app opens. */
+export function joinShared() { return connect(SHARED.name, SHARED.password, true); }
+
+/** Sign this phone in to a private family. The same name and password on another phone joins the same data. */
+export async function joinFamily(name, password) {
+  const clean = name.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (clean.length < 3) throw new Error('Pick a family name with at least 3 letters.');
+  if (password.length < 8) throw new Error('Use a password with at least 8 characters.');
+  const prev = cfg;
+  const r = await connect(clean, password, false);
+  if (syncStatus.state === 'error') {
+    const msg = syncStatus.error;
+    stopListening(); cfg = prev; saveCfg();
+    if (cfg) start(); else leaveFamily();
+    throw new Error(msg);
+  }
+  return r;
+}
+/** Stop syncing on this phone (until it is turned back on). The data stays on the phone. */
 export function leaveFamily() {
   cfg = null; saveCfg();
+  try { localStorage.setItem(PAUSED_KEY, '1'); } catch { /* ignore */ }
+  stopListening();
   clearInterval(poll); clearTimeout(timer);
-  Object.assign(syncStatus, { on: false, name: '', state: 'off', last: 0, error: '' });
+  Object.assign(syncStatus, { on: false, shared: false, name: '', state: 'off', last: 0, error: '' });
 }
 
 /** Call once at start-up, after the saved data is loaded. */
@@ -261,7 +324,17 @@ export function initSync() {
   hooks.beforeSave = stampChanges;
   hooks.afterSave = () => { if (cfg?.dirty) schedule(); };
   cfg = loadCfg();
+  let paused = false;
+  try { paused = localStorage.getItem(PAUSED_KEY) === '1'; } catch { /* ignore */ }
   if (cfg) start();
-  document.addEventListener('visibilitychange', () => { if (cfg && document.visibilityState === 'visible') schedule(500); });
-  window.addEventListener('online', () => schedule(500));
+  else if (!paused) joinShared().catch(() => { /* retried by the timer and when the app comes back */ });
+  document.addEventListener('visibilitychange', () => {
+    if (!cfg || document.visibilityState !== 'visible') return;
+    if (live.length < RELAYS.length) listen();
+    schedule(300);
+  });
+  window.addEventListener('online', () => {
+    if (cfg) { listen(); schedule(300); }
+    else if (!paused && localStorage.getItem(PAUSED_KEY) !== '1') joinShared().catch(() => {});
+  });
 }

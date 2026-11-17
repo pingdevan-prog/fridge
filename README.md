@@ -13,7 +13,7 @@ It is a single-page web app with no build step and no server. Open it on a phone
 - **Shop.** What the plan needs minus what is in the fridge, grouped by H-E-B store section, with brand suggestions and an estimated total.
 - **Cooking mode.** Pick servings, amounts scale, big step-by-step text with timers, screen stays on. "Done cooking" subtracts what you used from the fridge and logs the calories.
 - **Me.** Calories and macros per family member for today and the last 7 days, plus a weekly healthy-eating summary.
-- **Family sync.** Enter the same family name and password on every phone and they share one fridge, recipes, plan, shopping list and food log.
+- **Sync.** Everyone who opens the app shares one kitchen automatically: add food or a recipe on one phone and it shows up on the others within a few seconds. A family can switch to a private family name and password instead (Me, Sync).
 
 ## Where the data comes from
 
@@ -29,7 +29,9 @@ It is a single-page web app with no build step and no server. Open it on a phone
 
 Everything is stored in the browser on the device (localStorage), and each phone keeps a full copy. The Anthropic API key, if you add one, is kept only in that browser and is never synced or put in backups.
 
-## How family sync works
+## How sync works
+
+By default every phone joins the shared kitchen on its own, with no sign-in. Its name and password are built into this public code, so anyone using the app can see and change it. A private family name and password keeps the data to phones that know them. Each phone keeps a live connection to the relays, which forward a new save the moment it happens; a check every 30 seconds is the backup. Copies run on localhost use a separate test kitchen.
 
 There is no server of our own. Each phone encrypts the family's data with a key derived from the family password (AES-GCM) and stores the scrambled result on a few free public relay servers (the Nostr network). Other phones signed in with the same family name and password download it, unlock it and merge it record by record, so changes made on two phones at once are combined (the newer change to the same item wins). The relays only ever see scrambled text. They are free public infrastructure with no uptime promise, which is why every phone keeps its own full copy and re-uploads it if the relays ever lose it. Use a password nobody could guess: anyone with the family name and password can read and change the data.
 

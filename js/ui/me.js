@@ -3,7 +3,7 @@ import { state, commit, save, today, addDays, uid, resetAll, replaceAll, parseYm
 import { AGE_GROUPS, GOAL_MIN, GOAL_MAX, GUIDELINE_SOURCE, SOURCE, zero, addInto } from '../lib/nutrition.js';
 import { CUISINES } from '../lib/recipes.js';
 import { getKey, setKey, hasAI, MODELS } from '../lib/ai.js';
-import { syncStatus, joinFamily, leaveFamily, syncNow, resetShadow } from '../lib/sync.js';
+import { syncStatus, joinFamily, joinShared, leaveFamily, syncNow, resetShadow } from '../lib/sync.js';
 import { ic, avatar } from './icons.js';
 import { $, esc, on, render as redraw, registerView, openSheet, sheetOf, toast, withUndo, fields, options, num, cap } from './dom.js';
 
@@ -67,7 +67,7 @@ function render() {
       <button class="li" data-act="prefs-edit"><span class="cat t-o">${ic('utensils')}</span><span class="grow"><span class="nm">Food preferences</span><br><span class="muted small">${h.size} people · ${esc(list(h.cuisines)) || 'any cuisine'} · weeknights ${h.weeknightMinutes} min${h.allergies.length ? ' · allergies: ' + esc(list(h.allergies)) : ''}</span></span><span class="muted">Edit</span></button>
     </div></div>
     <div class="sec"><h2>Settings</h2><div class="list">
-      <button class="li" data-act="sync-open"><span class="cat t-g">${ic('users')}</span><span class="grow"><span class="nm">Family sync</span><br><span class="muted small">${esc(syncLine())}</span></span><span class="muted">${syncStatus.on ? 'Open' : 'Set up'}</span></button>
+      <button class="li" data-act="sync-open"><span class="cat t-g">${ic('users')}</span><span class="grow"><span class="nm">Sync</span><br><span class="muted small">${esc(syncLine())}</span></span><span class="muted">${syncStatus.on ? 'Open' : 'Set up'}</span></button>
       <button class="li" data-act="ai-edit"><span class="cat t-p">${ic('sparkle')}</span><span class="grow"><span class="nm">Claude photo and receipt reading</span><br><span class="muted small">${hasAI() ? 'On. Photos and receipts are read by Claude.' : 'Off. Add an API key for the most accurate scans.'}</span></span><span class="muted">${hasAI() ? 'Change' : 'Set up'}</span></button>
       <button class="li" data-act="data-open"><span class="cat t-b">${ic('download')}</span><span class="grow"><span class="nm">Backup and data</span><br><span class="muted small">Save a backup file or start over</span></span><span class="muted">Open</span></button>
       <button class="li" data-act="about-open"><span class="cat t-n">${ic('info')}</span><span class="grow"><span class="nm">About the numbers</span><br><span class="muted small">Where nutrition, recipes, prices and brands come from</span></span><span class="muted">Read</span></button>
@@ -176,32 +176,55 @@ on('ai-clear', (el) => { setKey(''); commit(); sheetOf(el).close(); toast('Key r
 // ---------------- Family sync ----------------
 const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : `${Math.round(m / 1440)} days ago`; };
 function syncLine() {
-  if (!syncStatus.on) return 'Off. Share one fridge, plan and list across the family\'s phones.';
-  if (syncStatus.state === 'error') return `On as “${syncStatus.name}”. ${syncStatus.error}`;
-  return `On as “${syncStatus.name}”. ${syncStatus.last ? 'Synced ' + ago(syncStatus.last) : 'Syncing…'}`;
+  if (!syncStatus.on) return 'Off on this phone. Turn it on to share with everyone.';
+  const who = syncStatus.shared ? 'Shared with everyone' : `Private family “${syncStatus.name}”`;
+  if (syncStatus.state === 'error') return `${who}. ${syncStatus.error}`;
+  return `${who}. ${syncStatus.last ? 'Synced ' + ago(syncStatus.last) : 'Syncing…'}`;
 }
-let joining = false, joinError = '';
-on('sync-open', () => openSheet(() => (syncStatus.on
-  ? `<h2>Family sync</h2><p class="sub">This phone shares its fridge, recipes, plan, shopping list and food log with everyone signed in to “${esc(syncStatus.name)}”.</p>
-    <div class="stack" style="margin-top:12px">
-      <p class="note ${syncStatus.state === 'error' ? 'red' : ''}">${syncStatus.state === 'error' ? esc(syncStatus.error) : syncStatus.state === 'syncing' ? 'Syncing now…' : syncStatus.last ? `Last synced ${ago(syncStatus.last)}. Changes are sent within a few seconds and other phones pick them up within about 30 seconds.` : 'Waiting for the first sync.'}</p>
-      <button class="btn block" data-act="sync-now">Sync now</button>
-      <p class="muted small">To add a phone: open Fridge on it, go to Me, Family sync, and enter the same family name and password.</p>
-      <button class="btn danger block" data-act="sync-leave">Stop syncing on this phone</button></div>`
-  : `<h2>Family sync</h2><p class="sub">Pick a family name and a password. Enter the same two on every phone and they all share one fridge, recipes, meal plan, shopping list and food log.</p>
-    <div class="stack" style="margin-top:12px" data-form="sync">
+let joining = false, joinError = '', showPrivate = false;
+const statusNote = () => `<p class="note ${syncStatus.state === 'error' ? 'red' : ''}">${syncStatus.state === 'error' ? esc(syncStatus.error) : syncStatus.state === 'syncing' ? 'Syncing now…' : syncStatus.last ? `Last synced ${ago(syncStatus.last)}. Changes show up on the other phones within a few seconds.` : 'Waiting for the first sync.'}</p>`;
+const privateForm = () => `<div class="stack" data-form="sync">
       <label class="field"><span>Family name</span><input class="input" name="name" autocomplete="off" autocapitalize="none" placeholder="for example: the-rajesh-kitchen"></label>
       <label class="field"><span>Family password (8 or more characters)</span><input class="input" name="password" type="text" autocomplete="off" autocapitalize="none" placeholder="something only your family knows"></label>
       ${joinError ? `<p class="note red">${esc(joinError)}</p>` : ''}
-      <button class="btn block" data-act="sync-join" ${joining ? 'disabled' : ''}>${joining ? 'Connecting…' : 'Turn on family sync'}</button>
-      <p class="note">Your data is locked with the password on this phone before it is sent, so the sync servers only ever hold scrambled text. Pick a password nobody could guess, because anyone with the name and password can see and change your family's data. What is already on this phone is combined with the family's data. Claude API keys stay on each phone.</p></div>`)));
+      <button class="btn block" data-act="sync-join" ${joining ? 'disabled' : ''}>${joining ? 'Connecting…' : 'Use this private family'}</button>
+      <p class="note">Only phones with the same family name and password see this data. It is locked with the password before it leaves the phone. What is already on this phone is combined with the family's data.</p></div>`;
+on('sync-open', () => { showPrivate = false; joinError = ''; openSheet(() => {
+  if (syncStatus.on && syncStatus.shared) return `<h2>Sync</h2><p class="sub">Everyone using this app shares one kitchen: the fridge, recipes, meal plan, shopping list and food log. Add something on one phone and it appears on the others.</p>
+    <div class="stack" style="margin-top:12px">
+      ${statusNote()}
+      <button class="btn block" data-act="sync-now">Sync now</button>
+      <p class="muted small">Anyone who opens this app can see and change the shared kitchen. To keep your data to your own family, use a private family name and password instead.</p>
+      ${showPrivate ? privateForm() : '<button class="btn ghost block" data-act="sync-private">Use a private family instead</button>'}
+      <button class="btn danger block" data-act="sync-leave">Stop syncing on this phone</button></div>`;
+  if (syncStatus.on) return `<h2>Sync</h2><p class="sub">This phone shares its fridge, recipes, plan, shopping list and food log with every phone signed in to the private family “${esc(syncStatus.name)}”.</p>
+    <div class="stack" style="margin-top:12px">
+      ${statusNote()}
+      <button class="btn block" data-act="sync-now">Sync now</button>
+      <p class="muted small">To add a phone: open Fridge on it, go to Me, Sync, choose Use a private family, and enter the same name and password.</p>
+      <button class="btn ghost block" data-act="sync-shared" ${joining ? 'disabled' : ''}>Switch to the kitchen everyone shares</button>
+      <button class="btn danger block" data-act="sync-leave">Stop syncing on this phone</button></div>`;
+  return `<h2>Sync</h2><p class="sub">Sync is off on this phone, so changes here stay here.</p>
+    <div class="stack" style="margin-top:12px">
+      <button class="btn block" data-act="sync-shared" ${joining ? 'disabled' : ''}>${joining ? 'Connecting…' : 'Share with everyone'}</button>
+      ${joinError ? '' : '<p class="muted small">Or keep it to your family with a private name and password:</p>'}
+      ${privateForm()}</div>`;
+}); });
+on('sync-private', (el) => { showPrivate = true; sheetOf(el).refresh(); });
+on('sync-shared', async (el) => {
+  const sh = sheetOf(el);
+  joining = true; joinError = ''; sh.refresh();
+  try { await joinShared(); } catch (e) { joinError = e.message; }
+  joining = false; sh.refresh(); commit();
+  if (!joinError) toast(syncStatus.state === 'error' ? syncStatus.error : 'Sharing with everyone');
+});
 on('sync-join', async (el) => {
   const sh = sheetOf(el), f = fields(sh.body);
   joining = true; joinError = ''; sh.refresh();
   try {
     const { found } = await joinFamily(f.name || '', f.password || '');
     joining = false; sh.close(); commit();
-    toast(found ? 'Connected. Your family\'s data is now on this phone.' : 'Family sync is on. Enter the same name and password on the other phones.');
+    toast(found ? 'Connected. Your family\'s data is now on this phone.' : 'Private family is on. Enter the same name and password on the other phones.');
   } catch (e) { joining = false; joinError = e.message; sh.refresh(); }
 });
 on('sync-now', async (el) => { const sh = sheetOf(el); const p = syncNow(); sh.refresh(); await p; sh.refresh(); redraw(); });
@@ -210,7 +233,7 @@ document.addEventListener('fridge-sync', () => { const row = document.querySelec
 
 // ---------------- Data ----------------
 on('data-open', () => openSheet(() => `<h2>Backup and data</h2>
-  <p class="sub">Everything is saved on this phone. To share it with the family's other phones, use Family sync. A backup file is a spare copy you keep yourself.</p>
+  <p class="sub">Everything is saved on this phone. It is also shared with the other phones through Sync. A backup file is a spare copy you keep yourself.</p>
   <div class="stack" style="margin-top:12px">
     <button class="btn block" data-act="data-export">Save a backup file</button>
     <label class="btn block">Load a backup file<input type="file" accept="application/json,.json" hidden data-change="data-import"></label>
@@ -238,7 +261,7 @@ on('data-reset', (el) => {
   // Erasing is for this phone only: leave family sync first so the rest of the family keeps their data.
   const wasSyncing = syncStatus.on;
   leaveFamily();
-  withUndo(wasSyncing ? 'Everything erased on this phone. Family sync was turned off here.' : 'Everything erased', resetAll);
+  withUndo(wasSyncing ? 'Everything erased on this phone. Sync was turned off here.' : 'Everything erased', resetAll);
   resetShadow();
 });
 
@@ -246,7 +269,7 @@ on('about-open', () => openSheet(() => `<h2>About the numbers</h2>
   <div class="stack" style="margin-top:12px">
     <p><b>Nutrition.</b> ${esc(SOURCE)} (per 100 g, mostly raw ingredients), built into the app. Recipe calories are added up from the actual ingredient amounts and divided by servings, so they are estimates. Items you edit can use a live USDA FoodData Central lookup.</p>
     <p><b>Calorie ranges.</b> ${esc(GUIDELINE_SOURCE)}. This app is not medical advice.</p>
-    <p><b>Recipes.</b> Web results come from TheMealDB and link to the original source. Starter recipes were written for this app. Cooking times and serving counts for web recipes are estimates.</p>
+    <p><b>Recipes.</b> Every recipe is one your family wrote. Times and servings are what you entered.</p>
     <p><b>Prices.</b> Shopping totals use what you paid on scanned receipts when available, otherwise rough typical prices. They are not H-E-B's prices.</p>
     <p><b>Brands.</b> Suggestions name H-E-B's store-brand lines by what they are generally known for. They are marked unverified until checked on heb.com.</p>
     <p><b>Expiration dates.</b> Estimated from typical shelf life for each food. Always check food before eating it.</p>
